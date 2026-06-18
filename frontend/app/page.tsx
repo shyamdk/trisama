@@ -904,6 +904,7 @@ function HealthView({ health, dropdownOptions, saving, submitHealthMetric }: { h
 
 function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, submitFood, deleteFood }: { foods: FoodLog[]; dropdownOptions: DropdownOption[]; fastingPlan: string; calorieTarget: number; saving: boolean; submitFood: (event: FormEvent<HTMLFormElement>, foodId?: number) => Promise<void>; deleteFood: (foodId: number) => Promise<void> }) {
   const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeError, setAnalyzeError] = useState("");
   const [editingFood, setEditingFood] = useState<FoodLog | null>(null);
   const mealTypeOptions = dropdownValues(dropdownOptions, "meal_type");
   const calorieRows = useMemo(() => dailyCalorieRows(foods, calorieTarget), [foods, calorieTarget]);
@@ -930,8 +931,12 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
   async function analyzeFood(form: HTMLFormElement) {
     const data = new FormData(form);
     const foodItem = text(data, "food_item");
-    if (!foodItem) return;
+    if (!foodItem) {
+      setAnalyzeError("Enter food items before analyzing.");
+      return;
+    }
     setAnalyzing(true);
+    setAnalyzeError("");
     try {
       const result = await apiPost<FoodAnalysis>("/foods/analyze", {
         meal_type: text(data, "meal_type") ?? "",
@@ -942,6 +947,8 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
       setInputValue(form, "quality_score", result.quality_score);
       setTextareaValue(form, "notes", result.comments);
       setFoodFlagCheckboxes(form, result.ai_risk_flags);
+    } catch (error) {
+      setAnalyzeError(error instanceof Error ? error.message : "Food analysis failed. Check that the API server is running.");
     } finally {
       setAnalyzing(false);
     }
@@ -971,6 +978,7 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
             <label>Calories<input name="calories" type="number" step="0.1" defaultValue={editingFood?.calories ?? ""} /></label>
             <label>Quality score<input name="quality_score" type="number" min="0" max="100" defaultValue={editingFood?.quality_score ?? ""} /></label>
           </div>
+          {analyzeError && <p className="danger">{analyzeError}</p>}
           <div className="actions">
             <label><input name="processed" type="checkbox" defaultChecked={editingFood?.processed ?? false} /> Processed</label>
             <label><input name="direct_sugar" type="checkbox" defaultChecked={editingFood?.direct_sugar ?? false} /> Direct sugar</label>

@@ -1,5 +1,13 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8010";
+const configuredApiBase = process.env.NEXT_PUBLIC_API_BASE;
 export const DEFAULT_USER_ID = 1;
+
+function apiBase() {
+  if (configuredApiBase) return configuredApiBase;
+  if (typeof window !== "undefined") {
+    return `${window.location.protocol}//${window.location.hostname}:8010`;
+  }
+  return "http://127.0.0.1:8010";
+}
 
 export type UserProfile = {
   id: number;
@@ -212,7 +220,7 @@ export type ChallengeDay = {
 };
 
 export async function apiGet<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+  const response = await fetch(`${apiBase()}${path}`, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(await errorMessage(response));
   }
@@ -220,7 +228,7 @@ export async function apiGet<T>(path: string): Promise<T> {
 }
 
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${apiBase()}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -232,7 +240,7 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
 }
 
 export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${apiBase()}${path}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -244,14 +252,14 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
 }
 
 export async function apiDelete(path: string): Promise<void> {
-  const response = await fetch(`${API_BASE}${path}`, { method: "DELETE" });
+  const response = await fetch(`${apiBase()}${path}`, { method: "DELETE" });
   if (!response.ok) {
     throw new Error(await errorMessage(response));
   }
 }
 
 export async function apiDeleteAuth(path: string, token: string): Promise<void> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${apiBase()}${path}`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -261,7 +269,7 @@ export async function apiDeleteAuth(path: string, token: string): Promise<void> 
 }
 
 export async function apiGetAuth<T>(path: string, token: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${apiBase()}${path}`, {
     cache: "no-store",
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -272,7 +280,7 @@ export async function apiGetAuth<T>(path: string, token: string): Promise<T> {
 }
 
 export async function apiPostAuth<T>(path: string, body: unknown, token: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${apiBase()}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
@@ -284,7 +292,7 @@ export async function apiPostAuth<T>(path: string, body: unknown, token: string)
 }
 
 export async function apiPatchAuth<T>(path: string, body: unknown, token: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${apiBase()}${path}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(body),

@@ -1,4 +1,5 @@
 import hashlib
+import os
 import secrets
 from datetime import date, datetime, timedelta
 from typing import TypeVar
@@ -82,14 +83,24 @@ DEFAULT_DROPDOWN_OPTIONS = {
     "reminder_channel": ["app", "telegram"],
 }
 
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3010",
+    "http://127.0.0.1:3010",
+]
+
+
+def cors_origins() -> list[str]:
+    configured = os.getenv("PLOS_CORS_ORIGINS", "")
+    extra = [origin.strip() for origin in configured.split(",") if origin.strip()]
+    return [*DEFAULT_CORS_ORIGINS, *extra]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3010",
-        "http://127.0.0.1:3010",
-    ],
+    allow_origins=cors_origins(),
+    allow_origin_regex=os.getenv("PLOS_CORS_ORIGIN_REGEX", r"https?://[^/]+:(3000|3010)"),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
