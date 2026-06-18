@@ -37,14 +37,7 @@ npm run dev
 
 Open `http://127.0.0.1:3010`.
 
-## Local Auth
 
-The app now requires login in the frontend.
-
-Default admin user:
-
-- Email: `admin@plos.local`
-- Password: `Admin@123`
 
 Admin users can create additional users from the `Admin` tab. New users receive a default password, are marked `must_change_password`, and can change it from the `Profile` tab after login.
 
