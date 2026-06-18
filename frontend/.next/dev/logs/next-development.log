@@ -1,0 +1,45 @@
+[00:00:02.366] Server  LOG      ✓ Ready in 2.1s
+[00:02:04.605] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:02:27.524] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[03:03:01.858] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[03:03:01.894] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[04:45:11.368] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[04:45:11.890] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[04:47:35.082] Browser ERROR   unhandledRejection: TypeError: Cannot read properties of null (reading 'reset')
+[04:58:56.765] Server  WARN     ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+[04:58:56.765] Browser ERROR   uncaughtError: TypeError: Cannot read properties of undefined (reading 'length')
+[04:58:57.302] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[04:58:57.770] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[05:05:07.010] Browser ERROR   unhandledRejection: TypeError: Cannot read properties of null (reading 'reset')
+[11:26:50.962] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[11:26:51.120] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[24:11:31.696] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[24:11:32.185] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[24:11:32.395] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[30:08:29.070] Server  WARN     ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+[30:08:29.070] Browser ERROR   uncaughtError: ReferenceError: dailyCalorieRows is not defined
+[30:08:29.509] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[30:08:30.062] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[35:54:25.839] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[35:54:26.040] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[60:00:49.863] Server  WARN     ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+[60:00:49.864] Browser ERROR   uncaughtError: ReferenceError: dailyFastingRows is not defined
+[60:00:52.509] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[60:00:53.013] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[60:11:14.477] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[60:11:14.629] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[78:04:46.204] Browser ERROR   unhandledRejection: TypeError: Failed to fetch
+[78:17:22.718] Browser ERROR   unhandledRejection: Error: Invalid or expired session
+[78:17:55.717] Browser ERROR   unhandledRejection: Error: Invalid or expired session
+[78:18:25.128] Browser ERROR   unhandledRejection: Error: Invalid or expired session
+[78:18:57.461] Browser ERROR   unhandledRejection: Error: Invalid or expired session
+[78:20:14.443] Browser ERROR   unhandledRejection: Error: Invalid or expired session
+[78:47:38.561] Browser ERROR   unhandledRejection: Error: Invalid or expired session
+[83:17:29.853] Browser ERROR   unhandledRejection: Error: Invalid or expired session
+[83:18:50.333] Browser ERROR   unhandledRejection: Error: Food log not found
+[83:22:29.354] Browser ERROR   unhandledRejection: Error: Invalid or expired session
+[83:24:17.648] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[83:24:18.216] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[86:29:24.694] Server  ERROR   Error: write EPIPE
+[86:29:24.695] Server  ERROR    ⨯ "uncaughtException:" Error: write EPIPE
+[86:29:24.697] Server  ERROR    ⨯ "uncaughtException: " Error: write EPIPE
