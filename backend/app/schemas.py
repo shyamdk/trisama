@@ -48,7 +48,7 @@ class AdminUserCreate(BaseModel):
     name: str
     email: str
     role: str = "user"
-    default_password: str = "ChangeMe@123"
+    default_password: str = Field(min_length=8)
     current_weight_kg: float = 118.0
     daily_calorie_target: float = 1800.0
     bp_medication: str = ""
@@ -88,7 +88,7 @@ class ResetPasswordRequest(BaseModel):
 
 
 class AdminPasswordResetRequest(BaseModel):
-    new_password: str = "ChangeMe@123"
+    new_password: str = Field(min_length=8)
 
 
 class DailyCheckInCreate(BaseModel):

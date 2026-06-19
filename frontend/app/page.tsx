@@ -693,15 +693,14 @@ function AuthView({ mode, setMode, resetToken, message, saving, submitLogin, sub
         <div>
           <div className="eyebrow">Personal Life Operating System</div>
           <h1>Login</h1>
-          <p className="muted">Default admin: admin@plos.local / Admin@123</p>
         </div>
       </header>
       <section className="panel">
         {mode === "login" && (
           <form onSubmit={submitLogin}>
             <div className="form-grid">
-              <label>Email<input name="email" type="email" defaultValue="admin@plos.local" required /></label>
-              <label>Password<input name="password" type="password" required /></label>
+              <label>Email<input name="email" type="email" autoComplete="username" required /></label>
+              <label>Password<input name="password" type="password" autoComplete="current-password" required /></label>
             </div>
             {message && <p className="danger">{message}</p>}
             <div className="actions">
@@ -1210,7 +1209,7 @@ function AdminView({ users, dropdownOptions, token, saving, setSaving, reload, s
         name: text(form, "name"),
         email: text(form, "email"),
         role: text(form, "role"),
-        default_password: text(form, "default_password") || "ChangeMe@123",
+        default_password: text(form, "default_password"),
         current_weight_kg: numeric(form, "current_weight_kg") ?? 0,
         daily_calorie_target: numeric(form, "daily_calorie_target") ?? 1800,
         bp_medication: text(form, "bp_medication") ?? "",
@@ -1231,13 +1230,13 @@ function AdminView({ users, dropdownOptions, token, saving, setSaving, reload, s
   }
 
   async function resetPassword(userId: number) {
-    const newPassword = window.prompt("Temporary password", "ChangeMe@123");
+    const newPassword = window.prompt("Temporary password");
     if (!newPassword) return;
     setSaving(true);
     setMessage("");
     try {
       await apiPostAuth(`/admin/users/${userId}/reset-password`, { new_password: newPassword }, token);
-      setMessage(`Password reset to: ${newPassword}`);
+      setMessage("Password reset. Share the temporary password securely.");
       await reload();
     } finally {
       setSaving(false);
@@ -1291,7 +1290,7 @@ function AdminView({ users, dropdownOptions, token, saving, setSaving, reload, s
             <label>Name<input name="name" required /></label>
             <label>Email<input name="email" type="email" required /></label>
             <label>Role<select name="role" defaultValue="user">{roleOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
-            <label>Default password<input name="default_password" defaultValue="ChangeMe@123" required /></label>
+            <label>Temporary password<input name="default_password" type="password" autoComplete="new-password" minLength={8} required /></label>
             <label>Current weight kg<input name="current_weight_kg" type="number" step="0.1" defaultValue="0" /></label>
             <label>Daily calorie target<input name="daily_calorie_target" type="number" step="1" defaultValue="1800" /></label>
             <label>BP medication<input name="bp_medication" /></label>

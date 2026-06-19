@@ -52,9 +52,8 @@ from .scoring import build_coach_brief, calculate_category_scores, calculate_lif
 
 app = FastAPI(title="PLOS API", version="0.1.0")
 DEFAULT_USER_ID = 1
-DEFAULT_ADMIN_EMAIL = "admin@plos.local"
-DEFAULT_ADMIN_PASSWORD = "Admin@123"
-DEFAULT_USER_PASSWORD = "ChangeMe@123"
+DEFAULT_ADMIN_EMAIL = os.getenv("PLOS_DEFAULT_ADMIN_EMAIL")
+DEFAULT_ADMIN_PASSWORD = os.getenv("PLOS_DEFAULT_ADMIN_PASSWORD")
 SESSION_DAYS = 7
 DEFAULT_ENABLED_MODULES = '["health","food","exercise","sleep","social","career","bad_habits","finance","reminders"]'
 UserOwnedModel = TypeVar("UserOwnedModel", DailyCheckIn, DailyChecklistItem, HealthMetric, HabitLog, FoodLog, FinanceSnapshot, Reminder, Challenge)
@@ -122,7 +121,8 @@ def ensure_user(db: Session) -> UserProfile:
     if profile:
         profile.email = profile.email or DEFAULT_ADMIN_EMAIL
         profile.role = "admin"
-        profile.password_hash = profile.password_hash or hash_password(DEFAULT_ADMIN_PASSWORD)
+        if not profile.password_hash and DEFAULT_ADMIN_PASSWORD:
+            profile.password_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
         profile.must_change_password = True if profile.must_change_password is None else profile.must_change_password
         profile.enabled_modules = profile.enabled_modules or DEFAULT_ENABLED_MODULES
         return profile
@@ -134,7 +134,7 @@ def ensure_user(db: Session) -> UserProfile:
         name="Primary User",
         email=DEFAULT_ADMIN_EMAIL,
         role="admin",
-        password_hash=hash_password(DEFAULT_ADMIN_PASSWORD),
+        password_hash=hash_password(DEFAULT_ADMIN_PASSWORD) if DEFAULT_ADMIN_PASSWORD else None,
         must_change_password=True,
         current_weight_kg=118.0,
         daily_calorie_target=1800.0,
@@ -474,7 +474,7 @@ def admin_reset_user_password(
     db.commit()
     return {
         "message": f"Password reset for {user.email or user.name}. User must change password after login.",
-        "reset_token": payload.new_password,
+        "reset_token": None,
     }
 
 
