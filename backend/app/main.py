@@ -255,6 +255,48 @@ def ensure_daily_checklist(db: Session, user_id: int, entry_date: date) -> list[
     return sorted(existing.values(), key=lambda item: [key for key, _label in DEFAULT_DAILY_CHECKLIST].index(item.item_key))
 
 
+def infer_daily_checklist_completion(db: Session, user_id: int, entry_date: date) -> dict[str, bool]:
+    health_rows = user_query(db, HealthMetric, user_id).filter(HealthMetric.entry_date == entry_date).all()
+    habit_rows = user_query(db, HabitLog, user_id).filter(HabitLog.entry_date == entry_date).all()
+    food_exists = (
+        user_query(db, FoodLog, user_id)
+        .filter(FoodLog.entry_date == entry_date)
+        .first()
+        is not None
+    )
+    habit_categories = {row.category for row in habit_rows}
+    return {
+        "body_metrics": any(
+            value is not None
+            for row in health_rows
+            for value in [
+                row.weight_kg,
+                row.body_fat_percent,
+                row.muscle_percent,
+                row.visceral_fat,
+                row.body_age,
+                row.bmr,
+            ]
+        ),
+        "bp": any(row.systolic_bp is not None and row.diastolic_bp is not None for row in health_rows),
+        "sugar": any(row.blood_sugar is not None for row in health_rows),
+        "food": food_exists,
+        "exercise": bool(habit_categories & {"exercise", "mind"}),
+        "sleep": "sleep" in habit_categories,
+        "bad_habits": bool(habit_categories & {"bad_habit", "bad_habits"}),
+    }
+
+
+def sync_daily_checklist_completion(db: Session, user_id: int, entry_date: date) -> list[DailyChecklistItem]:
+    rows = ensure_daily_checklist(db, user_id, entry_date)
+    inferred = infer_daily_checklist_completion(db, user_id, entry_date)
+    for item in rows:
+        if inferred.get(item.item_key):
+            item.completed = True
+    db.flush()
+    return rows
+
+
 def hash_password(password: str) -> str:
     salt = secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 120_000).hex()
@@ -547,7 +589,7 @@ def get_daily_checklist(
     db: Session = Depends(get_db),
 ) -> list[DailyChecklistItem]:
     get_user(db, user_id)
-    rows = ensure_daily_checklist(db, user_id, entry_date or date.today())
+    rows = sync_daily_checklist_completion(db, user_id, entry_date or date.today())
     db.commit()
     return rows
 
@@ -581,6 +623,8 @@ def create_health_metric(payload: HealthMetricCreate, user_id: int = Query(DEFAU
     get_user(db, user_id)
     item = HealthMetric(**with_user(payload.model_dump(), user_id))
     db.add(item)
+    db.flush()
+    sync_daily_checklist_completion(db, user_id, item.entry_date)
     db.commit()
     db.refresh(item)
     return item
@@ -596,6 +640,8 @@ def create_habit(payload: HabitLogCreate, user_id: int = Query(DEFAULT_USER_ID),
     get_user(db, user_id)
     item = HabitLog(**with_user(payload.model_dump(), user_id))
     db.add(item)
+    db.flush()
+    sync_daily_checklist_completion(db, user_id, item.entry_date)
     db.commit()
     db.refresh(item)
     return item
@@ -616,6 +662,8 @@ def create_food(payload: FoodLogCreate, user_id: int = Query(DEFAULT_USER_ID), d
     food_payload = apply_food_enrichment(food_payload, analysis)
     item = FoodLog(**with_user(food_payload, user_id))
     db.add(item)
+    db.flush()
+    sync_daily_checklist_completion(db, user_id, item.entry_date)
     db.commit()
     db.refresh(item)
     return item
@@ -653,6 +701,8 @@ def update_food(
         if key == "user_id":
             continue
         setattr(item, key, value)
+    db.flush()
+    sync_daily_checklist_completion(db, user_id, item.entry_date)
     db.commit()
     db.refresh(item)
     return item

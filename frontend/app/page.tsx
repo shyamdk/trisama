@@ -979,10 +979,10 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
             <label>Quality score<input name="quality_score" type="number" min="0" max="100" defaultValue={editingFood?.quality_score ?? ""} /></label>
           </div>
           {analyzeError && <p className="danger">{analyzeError}</p>}
-          <div className="actions">
-            <label><input name="processed" type="checkbox" defaultChecked={editingFood?.processed ?? false} /> Processed</label>
-            <label><input name="direct_sugar" type="checkbox" defaultChecked={editingFood?.direct_sugar ?? false} /> Direct sugar</label>
-            <label><input name="refined" type="checkbox" defaultChecked={editingFood?.refined ?? false} /> Refined</label>
+          <div className="checkbox-group">
+            <label className="checkbox-label"><input name="processed" type="checkbox" defaultChecked={editingFood?.processed ?? false} /> <span>Processed</span></label>
+            <label className="checkbox-label"><input name="direct_sugar" type="checkbox" defaultChecked={editingFood?.direct_sugar ?? false} /> <span>Direct sugar</span></label>
+            <label className="checkbox-label"><input name="refined" type="checkbox" defaultChecked={editingFood?.refined ?? false} /> <span>Refined</span></label>
           </div>
           <label>Comments<textarea name="notes" defaultValue={editingFood?.notes ?? ""} placeholder="AI comments on ingredients, quantity, quality, and risk flags can be updated here." /></label>
           <div className="actions">
@@ -1124,7 +1124,7 @@ function HabitView({ title, category, rows, saving, submitHabit, presets }: { ti
             <label>Unit<input name="unit" placeholder="mins, steps, km, count" /></label>
             <label>Target<input name="target" type="number" step="0.1" /></label>
           </div>
-          <label><input name="completed" type="checkbox" /> Completed</label>
+          <label className="checkbox-label"><input name="completed" type="checkbox" /> <span>Completed</span></label>
           <label>Notes<textarea name="notes" /></label>
           <button className="button" disabled={saving}>Save {title}</button>
         </form>
@@ -1175,7 +1175,7 @@ function ReminderView({ reminders, dropdownOptions, saving, submitReminder }: { 
             <label>Cadence<input name="cadence" placeholder="daily, weekly, monthly" /></label>
             <label>Channel<select name="channel">{channelOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
           </div>
-          <label><input name="completed" type="checkbox" /> Completed</label>
+          <label className="checkbox-label"><input name="completed" type="checkbox" /> <span>Completed</span></label>
           <label>Notes<textarea name="notes" /></label>
           <button className="button" disabled={saving}>Save Reminder</button>
         </form>
@@ -1509,7 +1509,7 @@ function HabitTable({ rows }: { rows: HabitLog[] }) {
 }
 
 function FoodTable({ rows, fastingPlan, editFood, deleteFood }: { rows: FoodLog[]; fastingPlan: string; editFood: (row: FoodLog) => void; deleteFood: (row: FoodLog) => void }) {
-  return <Table headers={["Edit", "Delete", "Date", "Time", "Meal", "Food", "Fasting", "Est. grams", "Calories", "Macros", "Quality", "Flags"]} rows={rows.map((row) => [
+  return <Table className="food-log-table" headers={["Edit", "Delete", "Date", "Time", "Meal", "Food", "Fasting", "Est. grams", "Calories", "Macros", "Quality", "Flags"]} rows={rows.map((row) => [
     <button className="button mini secondary" type="button" onClick={() => editFood(row)}>Edit</button>,
     <button className="button mini danger" type="button" onClick={() => deleteFood(row)}>Delete</button>,
     row.entry_date,
@@ -1557,10 +1557,10 @@ function ReminderTable({ rows }: { rows: Reminder[] }) {
   return <Table headers={["Title", "Category", "Due", "Cadence", "Channel", "Done"]} rows={rows.map((row) => [row.title, row.category, row.due_date ?? "-", row.cadence ?? "-", row.channel, row.completed ? "yes" : "no"])} />;
 }
 
-function Table({ headers, rows }: { headers: string[]; rows: React.ReactNode[][] }) {
+function Table({ headers, rows, className = "" }: { headers: string[]; rows: React.ReactNode[][]; className?: string }) {
   return (
     <div className="table-wrap section">
-      <table>
+      <table className={className}>
         <thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead>
         <tbody>
           {rows.length ? rows.map((row, index) => (
