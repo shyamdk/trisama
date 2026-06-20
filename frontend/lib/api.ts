@@ -62,6 +62,21 @@ export type DailyChecklistItem = {
   created_at: string;
 };
 
+export type DailyCheckIn = {
+  id: number;
+  user_id: number;
+  entry_date: string;
+  feeling: string | null;
+  mood: number | null;
+  energy: number | null;
+  stress: number | null;
+  day_rating: number | null;
+  gratitude: string | null;
+  journal_notes: string | null;
+  notes: string | null;
+  created_at: string;
+};
+
 export type HealthMetric = {
   id: number;
   entry_date: string;
@@ -76,12 +91,14 @@ export type HealthMetric = {
   visceral_fat: number | null;
   body_age: number | null;
   bmr: number | null;
+  shite_count: number | null;
   notes: string | null;
 };
 
 export type HabitLog = {
   id: number;
   entry_date: string;
+  habit_time: string | null;
   category: string;
   name: string;
   value: number | null;
@@ -97,6 +114,7 @@ export type FoodLog = {
   meal_time: string | null;
   meal_type: string;
   food_item: string;
+  post_meal_walk_meters: number | null;
   fasting_type: string | null;
   fasting_hours: number | null;
   eating_window_hours: number | null;
@@ -140,6 +158,20 @@ export type FinanceSnapshot = {
   monthly_cashflow: number | null;
   renewal_date: string | null;
   notes: string | null;
+};
+
+export type ExpenseLog = {
+  id: number;
+  user_id: number;
+  expense_date: string;
+  expense_time: string | null;
+  expense: string;
+  expense_type: string;
+  expense_category: string;
+  expense_mode: string;
+  cost: number;
+  notes: string | null;
+  created_at: string;
 };
 
 export type Reminder = {
@@ -187,6 +219,7 @@ export type DailyConsolidatedReport = {
   visceral_fat: number | null;
   body_age: number | null;
   bmr: number | null;
+  shite_count: number | null;
   food_count: number;
   total_calories: number | null;
   avg_quality_score: number | null;

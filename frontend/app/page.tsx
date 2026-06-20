@@ -3,9 +3,10 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   Dashboard,
+  DailyCheckIn,
   DailyChecklistItem,
   DropdownOption,
-  FinanceSnapshot,
+  ExpenseLog,
   FoodAnalysis,
   FoodLog,
   HabitLog,
@@ -25,7 +26,7 @@ import {
   userPath,
 } from "@/lib/api";
 
-const baseTabs = ["Dashboard", "Profile", "Health", "Food", "Exercise", "Sleep", "Social", "Career", "Bad Habits", "Finance", "Reminders", "Reports"];
+const baseTabs = ["Dashboard", "Profile", "Journal", "Health", "Food", "Exercise", "Sleep", "Career", "Bad Habits", "Expense Tracker", "Reminders", "Reports"];
 const fastingTimerStorageKey = "plos_fasting_countdown";
 const fastingTimerClearedKey = "plos_fasting_countdown_cleared_at";
 const expiredFastingPromptMs = 12 * 60 * 60 * 1000;
@@ -34,23 +35,23 @@ const moduleOptions = [
   { key: "food", label: "Food" },
   { key: "exercise", label: "Exercise" },
   { key: "sleep", label: "Sleep" },
-  { key: "social", label: "Social" },
   { key: "career", label: "Career" },
   { key: "bad_habits", label: "Bad Habits" },
-  { key: "finance", label: "Finance" },
+  { key: "expense_tracker", label: "Expense Tracker" },
   { key: "reminders", label: "Reminders" },
+  { key: "journal", label: "Journal" },
 ];
 const tabModule: Record<string, string | null> = {
   Dashboard: null,
   Profile: null,
+  Journal: "journal",
   Health: "health",
   Food: "food",
   Exercise: "exercise",
   Sleep: "sleep",
-  Social: "social",
   Career: "career",
   "Bad Habits": "bad_habits",
-  Finance: "finance",
+  "Expense Tracker": "expense_tracker",
   Reminders: "reminders",
   Reports: null,
   Admin: null,
@@ -61,13 +62,56 @@ const defaultDropdownOptions: Record<string, string[]> = {
   fasting_plan: ["16:8", "18:6", "Full day", "Custom"],
   sugar_context: ["Fasting", "PP", "Random"],
   meal_type: ["Breakfast", "Lunch", "Dinner", "Snack", "Fasting"],
-  exercise_name: ["Walking", "Pranayama", "Meditation", "Yoga", "Strength Training", "Weekend Cardio"],
+  physical_exercise_name: ["Yoga", "Walking", "Cycling", "Strength Training"],
+  mind_exercise_name: ["Meditation", "Pranayama"],
+  spirit_exercise_name: ["Vishnu Sahasranamam"],
   sleep_name: ["Sleep Duration", "Sleep Quality", "Bed Time Consistency"],
-  social_name: ["Call Friend", "Meet Friend/Cousin", "Bike Ride", "Comfort Zone Challenge"],
   career_name: ["Job Application", "Interview", "Learning Session", "Networking"],
   bad_habit_name: ["Direct Sugar", "Processed Food", "Refined Food", "Smoking", "Alcohol", "Social Media"],
-  finance_kind: ["property", "bank_account", "investment", "pf_retirement", "insurance", "liability", "expense", "trading"],
-  reminder_category: ["health", "food", "exercise", "sleep", "finance", "insurance", "social", "career"],
+  expense_type: [
+    "Groceries",
+    "Food & Dining",
+    "Rent",
+    "Utilities",
+    "Fuel",
+    "Transport",
+    "Medical",
+    "Insurance",
+    "Education",
+    "Entertainment",
+    "Shopping",
+    "Travel",
+    "Investments",
+    "EMI/Loan",
+    "Subscriptions",
+    "Gifts & Donations",
+    "Household",
+    "Personal Care",
+    "Clothing",
+    "Electronics",
+    "Fitness",
+    "Health Supplements",
+    "Mobile & Internet",
+    "Electricity",
+    "Water",
+    "Gas",
+    "Home Maintenance",
+    "Vehicle Maintenance",
+    "Parking",
+    "Tolls",
+    "Taxes",
+    "Professional Fees",
+    "Child Education",
+    "Pet Care",
+    "Charity",
+    "Festivals",
+    "Vacation",
+    "Business Expenses",
+    "Miscellaneous",
+  ],
+  expense_category: ["need", "want", "give"],
+  expense_mode: ["UPI", "Credit Card", "Debit Card", "Cash", "Net Banking", "Wallet", "Auto Debit", "Cheque"],
+  reminder_category: ["health", "food", "exercise", "sleep", "insurance", "career"],
   reminder_channel: ["app", "telegram"],
 };
 const dropdownLabels: Record<string, string> = {
@@ -76,12 +120,15 @@ const dropdownLabels: Record<string, string> = {
   fasting_plan: "Fasting plan",
   sugar_context: "Sugar type",
   meal_type: "Meal type",
-  exercise_name: "Exercise item",
+  physical_exercise_name: "Physical exercise item",
+  mind_exercise_name: "Mind exercise item",
+  spirit_exercise_name: "Spirit exercise item",
   sleep_name: "Sleep item",
-  social_name: "Social item",
   career_name: "Career item",
   bad_habit_name: "Bad habit item",
-  finance_kind: "Finance type",
+  expense_type: "Expense type",
+  expense_category: "Expense category",
+  expense_mode: "Expense mode",
   reminder_category: "Reminder category",
   reminder_channel: "Reminder channel",
 };
@@ -92,10 +139,6 @@ type FastingCountdown = {
   startAt: number;
   targetAt: number;
 };
-
-function money(value: number) {
-  return new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0, style: "currency", currency: "INR" }).format(value);
-}
 
 function numeric(form: FormData, key: string) {
   const value = form.get(key);
@@ -177,6 +220,10 @@ function timerDurationHoursForMeal(mealType: string | null | undefined, plan?: s
   return mealGapHours(plan);
 }
 
+function requiresPostMealWalk(mealType: string | null | undefined) {
+  return mealType === "Breakfast" || mealType === "Lunch" || mealType === "Dinner";
+}
+
 function localTimestamp(entryDate: string | null, entryTime: string | null) {
   if (!entryDate) return Date.now();
   const time = entryTime || currentTime();
@@ -237,11 +284,12 @@ export default function Home() {
   const [resetToken, setResetToken] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [checkins, setCheckins] = useState<DailyCheckIn[]>([]);
   const [dailyChecklist, setDailyChecklist] = useState<DailyChecklistItem[]>([]);
   const [health, setHealth] = useState<HealthMetric[]>([]);
   const [habits, setHabits] = useState<HabitLog[]>([]);
   const [foods, setFoods] = useState<FoodLog[]>([]);
-  const [finance, setFinance] = useState<FinanceSnapshot[]>([]);
+  const [expenses, setExpenses] = useState<ExpenseLog[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [report, setReport] = useState<Report | null>(null);
   const [dropdownOptions, setDropdownOptions] = useState<DropdownOption[]>([]);
@@ -271,24 +319,26 @@ export default function Home() {
     setLoading(true);
     try {
       const currentUserId = activeUser.id;
-      const [dash, checklistRows, healthRows, habitRows, foodRows, financeRows, reminderRows, weeklyReport, userProfile, dropdownRows] = await Promise.all([
+      const [dash, checkinRows, checklistRows, healthRows, habitRows, foodRows, expenseRows, reminderRows, weeklyReport, userProfile, dropdownRows] = await Promise.all([
         apiGet<Dashboard>(userPath("/dashboard", currentUserId)),
+        apiGet<DailyCheckIn[]>(userPath("/checkins", currentUserId)),
         apiGet<DailyChecklistItem[]>(userPath(`/daily-checklist?entry_date=${isoDate()}`, currentUserId)),
         apiGet<HealthMetric[]>(userPath("/health-metrics", currentUserId)),
         apiGet<HabitLog[]>(userPath("/habits", currentUserId)),
         apiGet<FoodLog[]>(userPath("/foods", currentUserId)),
-        apiGet<FinanceSnapshot[]>(userPath("/finance-snapshots", currentUserId)),
+        apiGet<ExpenseLog[]>(userPath("/expenses", currentUserId)),
         apiGet<Reminder[]>(userPath("/reminders", currentUserId)),
         apiGet<Report>(userPath("/reports/weekly", currentUserId)),
         apiGet<UserProfile>(`/users/${currentUserId}`),
         apiGet<DropdownOption[]>("/dropdown-options"),
       ]);
       setDashboard(dash);
+      setCheckins(checkinRows);
       setDailyChecklist(checklistRows);
       setHealth(healthRows);
       setHabits(habitRows);
       setFoods(foodRows);
-      setFinance(financeRows);
+      setExpenses(expenseRows);
       setReminders(reminderRows);
       setReport(weeklyReport);
       setUser(userProfile);
@@ -387,6 +437,22 @@ export default function Home() {
     }
   }
 
+  async function submitJournal(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await save("/checkins", {
+      entry_date: text(form, "entry_date"),
+      feeling: text(form, "feeling"),
+      mood: numeric(form, "mood"),
+      energy: numeric(form, "energy"),
+      stress: numeric(form, "stress"),
+      day_rating: numeric(form, "day_rating"),
+      gratitude: text(form, "gratitude"),
+      journal_notes: text(form, "journal_notes"),
+      notes: text(form, "notes"),
+    }, event.currentTarget);
+  }
+
   async function submitHealthMetric(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -403,6 +469,7 @@ export default function Home() {
       visceral_fat: numeric(form, "visceral_fat"),
       body_age: numeric(form, "body_age"),
       bmr: numeric(form, "bmr"),
+      shite_count: numeric(form, "shite_count"),
       notes: text(form, "notes"),
     }, event.currentTarget);
   }
@@ -410,14 +477,31 @@ export default function Home() {
   async function submitHabit(event: FormEvent<HTMLFormElement>, categoryOverride?: string) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const completedValue = text(form, "completed");
     await save("/habits", {
       entry_date: text(form, "entry_date"),
+      habit_time: text(form, "habit_time"),
       category: categoryOverride ?? text(form, "category"),
       name: text(form, "name"),
       value: numeric(form, "value"),
       unit: text(form, "unit"),
       target: numeric(form, "target"),
-      completed: form.get("completed") === "on",
+      completed: completedValue === "on" || completedValue === "true",
+      notes: text(form, "notes"),
+    }, event.currentTarget);
+  }
+
+  async function submitExpense(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await save("/expenses", {
+      expense_date: text(form, "expense_date"),
+      expense_time: text(form, "expense_time"),
+      expense: text(form, "expense"),
+      expense_type: text(form, "expense_type"),
+      expense_category: text(form, "expense_category"),
+      expense_mode: text(form, "expense_mode"),
+      cost: numeric(form, "cost") ?? 0,
       notes: text(form, "notes"),
     }, event.currentTarget);
   }
@@ -431,6 +515,7 @@ export default function Home() {
       meal_time: text(form, "meal_time"),
       meal_type: text(form, "meal_type"),
       food_item: text(form, "food_item") ?? "",
+      post_meal_walk_meters: numeric(form, "post_meal_walk_meters"),
       calories: numeric(form, "calories"),
       quality_score: numeric(form, "quality_score"),
       processed: form.get("processed") === "on",
@@ -475,21 +560,6 @@ export default function Home() {
     } finally {
       setSaving(false);
     }
-  }
-
-  async function submitFinance(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    await save("/finance-snapshots", {
-      entry_date: text(form, "entry_date"),
-      kind: text(form, "kind"),
-      name: text(form, "name"),
-      value: numeric(form, "value") ?? 0,
-      liability_value: numeric(form, "liability_value") ?? 0,
-      monthly_cashflow: numeric(form, "monthly_cashflow"),
-      renewal_date: text(form, "renewal_date"),
-      notes: text(form, "notes"),
-    }, event.currentTarget);
   }
 
   async function submitReminder(event: FormEvent<HTMLFormElement>) {
@@ -585,6 +655,7 @@ export default function Home() {
     setToken(null);
     setUser(null);
     setDashboard(null);
+    setCheckins([]);
     setActive("Dashboard");
   }
 
@@ -632,7 +703,7 @@ export default function Home() {
           <h1>{active === "Dashboard" ? "North Star Dashboard" : active}</h1>
           <p className="muted">
             Manual Phase 1 app for {user?.name ?? "the default user"}.
-            {user ? ` Current baseline: ${user.current_weight_kg} kg, BP medication: ${user.bp_medication}.` : ""}
+            {user ? ` Current baseline: ${user.current_weight_kg} kg.` : ""}
           </p>
           <p className="muted">Logs can be entered for today or up to 2 days back.</p>
         </div>
@@ -662,14 +733,14 @@ export default function Home() {
 
       {active === "Dashboard" && dashboard && <DashboardView dashboard={dashboard} checklist={dailyChecklist} toggleChecklistItem={toggleDailyChecklistItem} />}
       {active === "Profile" && user && <ProfileView user={user} dropdownOptions={dropdownOptions} saving={saving} submitProfile={submitProfile} submitChangePassword={submitChangePassword} />}
+      {active === "Journal" && <JournalView checkins={checkins} saving={saving} submitJournal={submitJournal} />}
       {active === "Health" && <HealthView health={health} dropdownOptions={dropdownOptions} saving={saving} submitHealthMetric={submitHealthMetric} />}
       {active === "Food" && <FoodView foods={foods} dropdownOptions={dropdownOptions} fastingPlan={user.fasting_plan ?? "16:8"} calorieTarget={user.daily_calorie_target ?? 1800} saving={saving} submitFood={submitFood} deleteFood={deleteFood} />}
-      {active === "Exercise" && <HabitView title="Exercise & Mind" category="exercise" rows={[...(habitsByCategory.exercise ?? []), ...(habitsByCategory.mind ?? [])]} saving={saving} submitHabit={submitHabit} presets={dropdownValues(dropdownOptions, "exercise_name")} />}
+      {active === "Exercise" && <ExerciseView rows={[...(habitsByCategory.exercise ?? []), ...(habitsByCategory.mind ?? [])]} dropdownOptions={dropdownOptions} saving={saving} submitHabit={submitHabit} />}
       {active === "Sleep" && <HabitView title="Sleep" category="sleep" rows={habitsByCategory.sleep ?? []} saving={saving} submitHabit={submitHabit} presets={dropdownValues(dropdownOptions, "sleep_name")} />}
-      {active === "Social" && <HabitView title="Social" category="social" rows={habitsByCategory.social ?? []} saving={saving} submitHabit={submitHabit} presets={dropdownValues(dropdownOptions, "social_name")} />}
       {active === "Career" && <HabitView title="Career & Growth" category="career" rows={[...(habitsByCategory.career ?? []), ...(habitsByCategory.growth ?? [])]} saving={saving} submitHabit={submitHabit} presets={dropdownValues(dropdownOptions, "career_name")} />}
       {active === "Bad Habits" && <HabitView title="Bad Habits" category="bad_habit" rows={habitsByCategory.bad_habit ?? []} saving={saving} submitHabit={submitHabit} presets={dropdownValues(dropdownOptions, "bad_habit_name")} />}
-      {active === "Finance" && <FinanceView dashboard={dashboard} finance={finance} dropdownOptions={dropdownOptions} saving={saving} submitFinance={submitFinance} />}
+      {active === "Expense Tracker" && <ExpenseTrackerView expenses={expenses} dropdownOptions={dropdownOptions} saving={saving} submitExpense={submitExpense} />}
       {active === "Reminders" && <ReminderView reminders={reminders} dropdownOptions={dropdownOptions} saving={saving} submitReminder={submitReminder} />}
       {active === "Reports" && report && <ReportView report={report} userId={user.id} setReport={setReport} />}
       {active === "Admin" && user.role === "admin" && token && <AdminView users={adminUsers} dropdownOptions={dropdownOptions} token={token} saving={saving} setSaving={setSaving} reload={() => loadAll()} setDropdownOptions={setDropdownOptions} />}
@@ -825,21 +896,9 @@ function DashboardView({ dashboard, checklist, toggleChecklistItem }: { dashboar
           </div>
         </div>
       </Panel>
-      <section className="grid two">
-        <Panel title="Category Scores">
-          <div className="score-list">{Object.entries(dashboard.category_scores).map(([key, value]) => <div className="score-row" key={key}><span>{key.replace("_", " ")}</span><strong>{value}</strong></div>)}</div>
-        </Panel>
-        <Panel title="Finance Snapshot">
-          <div className="score-list">
-            <div className="score-row"><span>Net worth</span><strong>{money(dashboard.net_worth)}</strong></div>
-            <div className="score-row"><span>Total assets</span><strong>{money(dashboard.total_assets)}</strong></div>
-            <div className="score-row"><span>Total liabilities</span><strong>{money(dashboard.total_liabilities)}</strong></div>
-            <div className="score-row"><span>Liquid assets</span><strong>{money(dashboard.liquid_assets)}</strong></div>
-            <div className="score-row"><span>Illiquid assets</span><strong>{money(dashboard.illiquid_assets)}</strong></div>
-            <div className="score-row"><span>Monthly investments</span><strong>{money(dashboard.monthly_investments)}</strong></div>
-          </div>
-        </Panel>
-      </section>
+      <Panel title="Category Scores">
+        <div className="score-list">{visibleCategoryScores(dashboard.category_scores).map(([key, value]) => <div className="score-row" key={key}><span>{key.replace("_", " ")}</span><strong>{value}</strong></div>)}</div>
+      </Panel>
       <Panel title="AI Coach Brief">
         <div className="grid two section">
           <CoachList title="Wins" rows={dashboard.coach.wins} />
@@ -848,6 +907,30 @@ function DashboardView({ dashboard, checklist, toggleChecklistItem }: { dashboar
           <CoachList title="Next Actions" rows={dashboard.coach.next_actions} />
         </div>
       </Panel>
+    </div>
+  );
+}
+
+function JournalView({ checkins, saving, submitJournal }: { checkins: DailyCheckIn[]; saving: boolean; submitJournal: (event: FormEvent<HTMLFormElement>) => void }) {
+  return (
+    <div className="grid two">
+      <Panel title="Journal Entry">
+        <form className="section" onSubmit={submitJournal}>
+          <div className="form-grid">
+            <label>Entry date<input name="entry_date" type="date" defaultValue={isoDate()} min={isoDate(-2)} max={isoDate()} required /></label>
+            <label>How I feel<input name="feeling" maxLength={120} /></label>
+            <label>Mood<input name="mood" type="number" min="1" max="10" /></label>
+            <label>Energy<input name="energy" type="number" min="1" max="10" /></label>
+            <label>Stress<input name="stress" type="number" min="1" max="10" /></label>
+            <label>Day rating<input name="day_rating" type="number" min="1" max="10" /></label>
+          </div>
+          <label>Gratitude<textarea name="gratitude" /></label>
+          <label>Journal notes<textarea className="journal-textarea" name="journal_notes" /></label>
+          <label>Notes<textarea name="notes" /></label>
+          <button className="button" disabled={saving}>Save Journal</button>
+        </form>
+      </Panel>
+      <Panel title="Recent Journal Entries"><JournalTable rows={checkins} /></Panel>
     </div>
   );
 }
@@ -896,6 +979,16 @@ function HealthView({ health, dropdownOptions, saving, submitHealthMetric }: { h
           <button className="button" disabled={saving}>Save Body Metrics</button>
         </form>
       </Panel>
+      <Panel title="Shite">
+        <form className="section" onSubmit={submitHealthMetric}>
+          <div className="form-grid">
+            <label>Entry date<input name="entry_date" type="date" defaultValue={isoDate()} min={isoDate(-2)} max={isoDate()} required /></label>
+            <label>Count<input name="shite_count" type="number" min="0" step="1" required /></label>
+          </div>
+          <label>Notes<textarea name="notes" /></label>
+          <button className="button" disabled={saving}>Save Shite</button>
+        </form>
+      </Panel>
       <Panel title="Recent Health Logs"><HealthTable rows={health} /></Panel>
     </div>
   );
@@ -905,9 +998,18 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState("");
   const [editingFood, setEditingFood] = useState<FoodLog | null>(null);
+  const [selectedMealType, setSelectedMealType] = useState(editingFood?.meal_type ?? "Breakfast");
+  const [postMealWalkMeters, setPostMealWalkMeters] = useState(editingFood?.post_meal_walk_meters === null || editingFood?.post_meal_walk_meters === undefined ? "" : String(editingFood.post_meal_walk_meters));
   const mealTypeOptions = dropdownValues(dropdownOptions, "meal_type");
   const calorieRows = useMemo(() => dailyCalorieRows(foods, calorieTarget), [foods, calorieTarget]);
   const fastingRows = useMemo(() => dailyFastingRows(foods), [foods]);
+  const walkRequired = requiresPostMealWalk(selectedMealType);
+  const walkDistanceReady = !walkRequired || Number(postMealWalkMeters) > 0;
+
+  useEffect(() => {
+    setSelectedMealType(editingFood?.meal_type ?? "Breakfast");
+    setPostMealWalkMeters(editingFood?.post_meal_walk_meters === null || editingFood?.post_meal_walk_meters === undefined ? "" : String(editingFood.post_meal_walk_meters));
+  }, [editingFood]);
 
   async function handleFoodSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -918,6 +1020,8 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
     try {
       await submitFood(event, editingFood?.id);
       setEditingFood(null);
+      setSelectedMealType("Breakfast");
+      setPostMealWalkMeters("");
     } catch (error) {
       if (error instanceof Error && error.message.includes("Food log not found")) {
         setEditingFood(null);
@@ -932,6 +1036,10 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
     const foodItem = text(data, "food_item");
     if (!foodItem) {
       setAnalyzeError("Enter food items before analyzing.");
+      return;
+    }
+    if (requiresPostMealWalk(text(data, "meal_type")) && !(numeric(data, "post_meal_walk_meters") ?? 0)) {
+      setAnalyzeError("Enter post-meal walk distance in meters before analyzing this meal.");
       return;
     }
     setAnalyzing(true);
@@ -971,12 +1079,14 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
           <div className="form-grid">
             <label>Entry date<input name="entry_date" type="date" defaultValue={editingFood?.entry_date ?? isoDate()} min={isoDate(-2)} max={isoDate()} required /></label>
             <label>Meal time<input name="meal_time" type="time" defaultValue={timeValue(editingFood?.meal_time) ?? currentTime()} /></label>
-            <label>Meal type<select name="meal_type" defaultValue={editingFood?.meal_type ?? "Breakfast"} required>{mealTypeOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label>Meal type<select name="meal_type" value={selectedMealType} onChange={(event) => setSelectedMealType(event.currentTarget.value)} required>{mealTypeOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
             <label className="wide-field">Food items<textarea className="compact-textarea" name="food_item" defaultValue={editingFood?.food_item ?? ""} placeholder="boiled egg (3), veges (100 gms)" /></label>
-            <button className="button mini secondary" type="button" disabled={saving || analyzing} onClick={(event) => analyzeFood(event.currentTarget.form!)}>{analyzing ? "Analyzing..." : "Analyze"}</button>
+            <label>Post-meal walk distance (meters)<input name="post_meal_walk_meters" type="number" min="1" step="1" value={postMealWalkMeters} onChange={(event) => setPostMealWalkMeters(event.currentTarget.value)} required={walkRequired} /></label>
+            <button className="button mini secondary" type="button" disabled={saving || analyzing || !walkDistanceReady} onClick={(event) => analyzeFood(event.currentTarget.form!)}>{analyzing ? "Analyzing..." : "Analyze"}</button>
             <label>Calories<input name="calories" type="number" step="0.1" defaultValue={editingFood?.calories ?? ""} /></label>
             <label>Quality score<input name="quality_score" type="number" min="0" max="100" defaultValue={editingFood?.quality_score ?? ""} /></label>
           </div>
+          {walkRequired && !walkDistanceReady && <p className="muted">Post-meal walk distance in meters is required before analysis for breakfast, lunch, and dinner.</p>}
           {analyzeError && <p className="danger">{analyzeError}</p>}
           <div className="checkbox-group">
             <label className="checkbox-label"><input name="processed" type="checkbox" defaultChecked={editingFood?.processed ?? false} /> <span>Processed</span></label>
@@ -1111,6 +1221,61 @@ function formatDuration(ms: number) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
+function ExerciseView({ rows, dropdownOptions, saving, submitHabit }: { rows: HabitLog[]; dropdownOptions: DropdownOption[]; saving: boolean; submitHabit: (event: FormEvent<HTMLFormElement>, category?: string) => void }) {
+  return (
+    <div className="grid two">
+      <Panel title="Physical">
+        <ExerciseEntryForm
+          category="exercise"
+          options={dropdownValues(dropdownOptions, "physical_exercise_name")}
+          saving={saving}
+          submitHabit={submitHabit}
+        />
+      </Panel>
+      <Panel title="Mind and Spirits">
+        <div className="stack section">
+          <div>
+            <h3>Mind</h3>
+            <ExerciseEntryForm
+              category="mind"
+              options={dropdownValues(dropdownOptions, "mind_exercise_name")}
+              saving={saving}
+              submitHabit={submitHabit}
+            />
+          </div>
+          <div>
+            <h3>Spirit</h3>
+            <ExerciseEntryForm
+              category="mind"
+              options={dropdownValues(dropdownOptions, "spirit_exercise_name")}
+              saving={saving}
+              submitHabit={submitHabit}
+            />
+          </div>
+        </div>
+      </Panel>
+      <Panel title="Recent Exercise Logs"><HabitTable rows={rows} /></Panel>
+    </div>
+  );
+}
+
+function ExerciseEntryForm({ category, options, saving, submitHabit }: { category: string; options: string[]; saving: boolean; submitHabit: (event: FormEvent<HTMLFormElement>, category?: string) => void }) {
+  return (
+    <form className="section" onSubmit={(event) => submitHabit(event, category)}>
+      <input name="unit" type="hidden" value="mins" />
+      <input name="completed" type="hidden" value="true" />
+      <div className="form-grid">
+        <label>Item<select name="name" required>{options.map((item) => <option key={item}>{item}</option>)}</select></label>
+        <label>Entry date<input name="entry_date" type="date" defaultValue={isoDate()} min={isoDate(-2)} max={isoDate()} required /></label>
+        <label>Time<input name="habit_time" type="time" defaultValue={currentTime()} required /></label>
+        <label>Mins<input name="value" type="number" min="1" step="1" required /></label>
+      </div>
+      <label>Notes<textarea name="notes" /></label>
+      <button className="button" disabled={saving}>Save</button>
+    </form>
+  );
+}
+
 function HabitView({ title, category, rows, saving, submitHabit, presets }: { title: string; category: string; rows: HabitLog[]; saving: boolean; submitHabit: (event: FormEvent<HTMLFormElement>, category?: string) => void; presets: string[] }) {
   return (
     <div className="grid two">
@@ -1133,28 +1298,33 @@ function HabitView({ title, category, rows, saving, submitHabit, presets }: { ti
   );
 }
 
-function FinanceView({ dashboard, finance, dropdownOptions, saving, submitFinance }: { dashboard: Dashboard | null; finance: FinanceSnapshot[]; dropdownOptions: DropdownOption[]; saving: boolean; submitFinance: (event: FormEvent<HTMLFormElement>) => void }) {
-  const financeKindOptions = dropdownValues(dropdownOptions, "finance_kind");
+function ExpenseTrackerView({ expenses, dropdownOptions, saving, submitExpense }: { expenses: ExpenseLog[]; dropdownOptions: DropdownOption[]; saving: boolean; submitExpense: (event: FormEvent<HTMLFormElement>) => void }) {
+  const expenseTypeOptions = dropdownValues(dropdownOptions, "expense_type");
+  const expenseCategoryOptions = dropdownValues(dropdownOptions, "expense_category");
+  const expenseModeOptions = dropdownValues(dropdownOptions, "expense_mode");
+  const totalCost = expenses.reduce((sum, row) => sum + row.cost, 0);
   return (
     <div className="stack">
-      {dashboard && <section className="grid metrics"><Metric title="Net Worth" value={money(dashboard.net_worth)} note="Assets minus liabilities" /><Metric title="Assets" value={money(dashboard.total_assets)} note="Tracked snapshots" /><Metric title="Liabilities" value={money(dashboard.total_liabilities)} note="Loans and dues" /><Metric title="Investments" value={money(dashboard.monthly_investments)} note="Monthly contribution" /></section>}
+      <section className="grid metrics">
+        <Metric title="Recent Spend" value={`Rs ${Math.round(totalCost)}`} note={`${expenses.length} logged expenses`} />
+      </section>
       <div className="grid two">
-        <Panel title="Finance Snapshot Entry">
-          <form className="section" onSubmit={submitFinance}>
+        <Panel title="Expense Entry">
+          <form className="section" onSubmit={submitExpense}>
             <div className="form-grid">
-              <label>Entry date<input name="entry_date" type="date" defaultValue={isoDate()} min={isoDate(-2)} max={isoDate()} required /></label>
-              <label>Type<select name="kind" required>{financeKindOptions.map((kind) => <option key={kind} value={kind}>{kind.replace("_", " ")}</option>)}</select></label>
-              <label>Name<input name="name" required placeholder="Home, EPF, term policy, HDFC savings..." /></label>
-              <label>Asset value<input name="value" type="number" step="0.01" /></label>
-              <label>Liability value<input name="liability_value" type="number" step="0.01" /></label>
-              <label>Monthly cashflow<input name="monthly_cashflow" type="number" step="0.01" /></label>
-              <label>Renewal date<input name="renewal_date" type="date" /></label>
+              <label>Expense<input name="expense" required /></label>
+              <label>Expense date<input name="expense_date" type="date" defaultValue={isoDate()} required /></label>
+              <label>Expense time<input name="expense_time" type="time" defaultValue={currentTime()} required /></label>
+              <label>Expense type<select name="expense_type" required>{expenseTypeOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+              <label>Expense cat<select name="expense_category" defaultValue="need" required>{expenseCategoryOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+              <label>Expense mode<select name="expense_mode" defaultValue="UPI" required>{expenseModeOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+              <label>Cost Rs.<input name="cost" type="number" min="0" step="0.01" required /></label>
             </div>
             <label>Notes<textarea name="notes" /></label>
-            <button className="button" disabled={saving}>Save Finance Snapshot</button>
+            <button className="button" disabled={saving}>Save Expense</button>
           </form>
         </Panel>
-        <Panel title="Recent Finance Snapshots"><FinanceTable rows={finance} /></Panel>
+        <Panel title="Recent Expenses"><ExpenseTable rows={expenses} /></Panel>
       </div>
     </div>
   );
@@ -1387,6 +1557,10 @@ function listOrDash(items: string[]) {
   return <ul className="compact-list">{items.map((item) => <li key={item}>{item}</li>)}</ul>;
 }
 
+function visibleCategoryScores(scores: Record<string, number>) {
+  return Object.entries(scores).filter(([key]) => key !== "finance" && key !== "social");
+}
+
 function ReportView({ report, userId, setReport }: { report: Report; userId: number; setReport: (report: Report) => void }) {
   async function load(period: string) {
     setReport(await apiGet<Report>(userPath(`/reports/${period}`, userId)));
@@ -1419,7 +1593,7 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
   return (
     <div className="stack">
       <div className="actions"><button className="button secondary" onClick={() => load("daily")}>Daily</button><button className="button secondary" onClick={() => load("weekly")}>Weekly</button><button className="button secondary" onClick={() => load("monthly")}>Monthly</button><button className="button secondary" onClick={() => load("quarterly")}>Quarterly</button></div>
-      <section className="grid metrics"><Metric title="Period" value={report.period} note="Generated report" /><Metric title="Life Score" value={String(report.life_score)} note="0-1000" /><Metric title="Accountability" value={String(report.accountability_score)} note="Logging" /><Metric title="Net Worth" value={money(report.finance_summary.net_worth ?? 0)} note="Finance summary" /></section>
+      <section className="grid metrics"><Metric title="Period" value={report.period} note="Generated report" /><Metric title="Life Score" value={String(report.life_score)} note="0-1000" /><Metric title="Accountability" value={String(report.accountability_score)} note="Logging" /></section>
       <Panel title="Consolidated Daily Report">
         <div className="stack section">
           {report.daily_reports?.length ? report.daily_reports.map((day) => (
@@ -1439,10 +1613,10 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
                   ["BP", day.bp ?? "-"],
                   ["Sugar", day.sugar === null ? "-" : `${day.sugar}${day.sugar_context ? ` ${day.sugar_context}` : ""}${day.sugar_time ? ` at ${day.sugar_time}` : ""}`],
                   ["Body metrics", `Fat: ${day.body_fat_percent ?? "-"} | Muscle: ${day.muscle_percent ?? "-"} | Visceral: ${day.visceral_fat ?? "-"} | Body age: ${day.body_age ?? "-"} | BMR: ${day.bmr ?? "-"}`],
+                  ["Shite", day.shite_count === null ? "-" : String(day.shite_count)],
                   ["Food", listOrDash(day.food_items)],
                   ["Food quality", `Avg score: ${day.avg_quality_score ?? "-"} | Flags: ${day.food_flags.length ? day.food_flags.join(", ") : "-"}`],
                   ["Habits", listOrDash(day.habit_items)],
-                  ["Finance", listOrDash(day.finance_items)],
                   ["Reminders", listOrDash(day.reminder_items)],
                   ["Notes", listOrDash(day.notes)],
                 ]}
@@ -1482,7 +1656,7 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
           }) : <p className="muted">No challenges yet.</p>}
         </div>
       </Panel>
-      <section className="grid two"><Panel title="Trends"><CoachList title="" rows={report.trends} /></Panel><Panel title="Risks"><CoachList title="" rows={report.risks} /></Panel><Panel title="Recommendations"><CoachList title="" rows={report.recommendations} /></Panel><Panel title="Category Scores"><div className="score-list">{Object.entries(report.category_scores).map(([key, value]) => <div className="score-row" key={key}><span>{key.replace("_", " ")}</span><strong>{value}</strong></div>)}</div></Panel></section>
+      <section className="grid two"><Panel title="Trends"><CoachList title="" rows={report.trends} /></Panel><Panel title="Risks"><CoachList title="" rows={report.risks} /></Panel><Panel title="Recommendations"><CoachList title="" rows={report.recommendations} /></Panel><Panel title="Category Scores"><div className="score-list">{visibleCategoryScores(report.category_scores).map(([key, value]) => <div className="score-row" key={key}><span>{key.replace("_", " ")}</span><strong>{value}</strong></div>)}</div></Panel></section>
     </div>
   );
 }
@@ -1499,28 +1673,52 @@ function CoachList({ title, rows }: { title: string; rows: string[] }) {
   return <div>{title && <h3>{title}</h3>}<ul className="coach-list">{rows.map((item) => <li key={item}>{item}</li>)}</ul></div>;
 }
 
+function JournalTable({ rows }: { rows: DailyCheckIn[] }) {
+  return <Table headers={["Date", "Feeling", "Scores", "Gratitude", "Journal Notes"]} rows={rows.map((row) => [
+    row.entry_date,
+    row.feeling ?? "-",
+    `Mood ${row.mood ?? "-"} | Energy ${row.energy ?? "-"} | Stress ${row.stress ?? "-"} | Day ${row.day_rating ?? "-"}`,
+    row.gratitude ?? "-",
+    row.journal_notes ?? row.notes ?? "-",
+  ])} />;
+}
+
 function HealthTable({ rows }: { rows: HealthMetric[] }) {
-  return <Table headers={["Date", "Time", "Weight", "BP", "Sugar", "Type", "Body Fat", "Notes"]} rows={rows.map((row) => [row.entry_date, row.measurement_time ?? "-", row.weight_kg ?? "-", row.systolic_bp && row.diastolic_bp ? `${row.systolic_bp}/${row.diastolic_bp}` : "-", row.blood_sugar ?? "-", row.sugar_context ?? "-", row.body_fat_percent ?? "-", row.notes ?? "-"])} />;
+  return <Table headers={["Date", "Time", "Weight", "BP", "Sugar", "Type", "Body Fat", "Shite", "Notes"]} rows={rows.map((row) => [row.entry_date, row.measurement_time ?? "-", row.weight_kg ?? "-", row.systolic_bp && row.diastolic_bp ? `${row.systolic_bp}/${row.diastolic_bp}` : "-", row.blood_sugar ?? "-", row.sugar_context ?? "-", row.body_fat_percent ?? "-", row.shite_count ?? "-", row.notes ?? "-"])} />;
 }
 
 function HabitTable({ rows }: { rows: HabitLog[] }) {
-  return <Table headers={["Date", "Name", "Value", "Target", "Done", "Notes"]} rows={rows.map((row) => [row.entry_date, row.name, `${row.value ?? "-"} ${row.unit ?? ""}`, row.target ?? "-", row.completed ? "yes" : "no", row.notes ?? "-"])} />;
+  return <Table headers={["Date", "Time", "Name", "Value", "Target", "Done", "Notes"]} rows={rows.map((row) => [row.entry_date, timeValue(row.habit_time) ?? "-", row.name, `${row.value ?? "-"} ${row.unit ?? ""}`, row.target ?? "-", row.completed ? "yes" : "no", row.notes ?? "-"])} />;
 }
 
 function FoodTable({ rows, fastingPlan, editFood, deleteFood }: { rows: FoodLog[]; fastingPlan: string; editFood: (row: FoodLog) => void; deleteFood: (row: FoodLog) => void }) {
-  return <Table className="food-log-table" headers={["Edit", "Delete", "Date", "Time", "Meal", "Food", "Fasting", "Est. grams", "Calories", "Macros", "Quality", "Flags"]} rows={rows.map((row) => [
+  return <Table className="food-log-table" headers={["Edit", "Delete", "Date", "Time", "Meal", "Food", "Walk", "Fasting", "Est. grams", "Calories", "Macros", "Quality", "Flags"]} rows={rows.map((row) => [
     <button className="button mini secondary" type="button" onClick={() => editFood(row)}>Edit</button>,
     <button className="button mini danger" type="button" onClick={() => deleteFood(row)}>Delete</button>,
     row.entry_date,
     timeValue(row.meal_time) ?? "-",
     row.meal_type,
     row.food_item || "-",
+    row.post_meal_walk_meters === null ? "-" : `${row.post_meal_walk_meters} m`,
     fastingPlan,
     row.quantity_grams ?? "-",
     row.calories ?? "-",
     `P:${row.protein ?? "-"} C:${row.carbs ?? "-"} F:${row.fat ?? "-"}`,
     row.quality_score ?? "-",
     foodFlags(row),
+  ])} />;
+}
+
+function ExpenseTable({ rows }: { rows: ExpenseLog[] }) {
+  return <Table headers={["Date", "Time", "Expense", "Type", "Cat", "Mode", "Cost", "Notes"]} rows={rows.map((row) => [
+    row.expense_date,
+    timeValue(row.expense_time) ?? "-",
+    row.expense,
+    row.expense_type,
+    row.expense_category,
+    row.expense_mode,
+    `Rs ${row.cost}`,
+    row.notes ?? "-",
   ])} />;
 }
 
@@ -1546,10 +1744,6 @@ function parseJsonList(value: string | null) {
   } catch {
     return [];
   }
-}
-
-function FinanceTable({ rows }: { rows: FinanceSnapshot[] }) {
-  return <Table headers={["Date", "Type", "Name", "Asset", "Liability", "Cashflow", "Renewal"]} rows={rows.map((row) => [row.entry_date, row.kind, row.name, money(row.value), money(row.liability_value), row.monthly_cashflow === null ? "-" : money(row.monthly_cashflow), row.renewal_date ?? "-"])} />;
 }
 
 function ReminderTable({ rows }: { rows: Reminder[] }) {

@@ -48,19 +48,6 @@ def calculate_category_scores(
     if sleep_habits:
         sleep_score = 35 + (sum(1 for h in sleep_habits if h.completed) / len(sleep_habits)) * 65
 
-    finance_score = 45
-    if finance:
-        finance_score += 25
-    if any(item.kind == "investment" and item.monthly_cashflow and item.monthly_cashflow > 0 for item in finance):
-        finance_score += 15
-    if any(item.kind == "insurance" and item.renewal_date for item in finance):
-        finance_score += 10
-
-    social_habits = [h for h in recent_habits if h.category == "social"]
-    social_score = 45
-    if social_habits:
-        social_score = 35 + (sum(1 for h in social_habits if h.completed) / len(social_habits)) * 65
-
     career_habits = [h for h in recent_habits if h.category in {"career", "growth"}]
     career_score = 45
     if career_habits:
@@ -73,8 +60,6 @@ def calculate_category_scores(
         "food": clamp_score(food_score),
         "exercise": clamp_score(exercise_score),
         "sleep": clamp_score(sleep_score),
-        "finance": clamp_score(finance_score),
-        "social": clamp_score(social_score),
         "career_growth": clamp_score(career_score),
         "accountability": clamp_score(accountability_score),
     }
@@ -85,10 +70,8 @@ def calculate_life_score(category_scores: dict[str, int]) -> int:
         category_scores["health"] * 0.30
         + category_scores["food"] * 0.25
         + category_scores["exercise"] * 0.20
-        + category_scores["sleep"] * 0.10
-        + category_scores["finance"] * 0.05
-        + category_scores["social"] * 0.05
-        + category_scores["career_growth"] * 0.05
+        + category_scores["sleep"] * 0.15
+        + category_scores["career_growth"] * 0.10
     )
     return clamp_score(weighted * 10, 0, 1000)
 
@@ -135,17 +118,12 @@ def build_coach_brief(
         wins.append("Logging consistency is building.")
     if category_scores["exercise"] >= 70:
         wins.append("Exercise and mind habits are on track.")
-    if category_scores["finance"] >= 70:
-        wins.append("Finance snapshots are giving useful visibility.")
-
     if not checkins:
         missing_logs.append("Daily check-in")
     if not latest_health:
         missing_logs.append("Weight and BP")
     if not foods:
         missing_logs.append("Food log")
-    if not finance:
-        missing_logs.append("Finance snapshot")
 
     if latest_health and latest_health.systolic_bp and latest_health.systolic_bp >= 140:
         risks.append("BP reading is elevated. Track calmly and discuss repeated abnormal readings with a doctor.")
@@ -153,8 +131,6 @@ def build_coach_brief(
         risks.append("Food quality is pulling the Life Score down.")
     if category_scores["sleep"] < 50:
         risks.append("Sleep consistency needs attention.")
-    if category_scores["finance"] < 55:
-        risks.append("Finance tracking is incomplete, so net worth insight is weak.")
 
     if "Weight and BP" in missing_logs:
         next_actions.append("Log today's weight and BP before the end of the day.")
@@ -162,8 +138,6 @@ def build_coach_brief(
         next_actions.append("Complete a 15-minute walk, pranayama, meditation, or yoga block today.")
     if category_scores["food"] < 70:
         next_actions.append("Log the next meal with quantity and food quality score.")
-    if category_scores["finance"] < 70:
-        next_actions.append("Add one current bank, investment, PF, insurance, property, or liability snapshot.")
 
     return {
         "wins": wins[:3] or ["You have a clean starting point. Log honestly today."],
@@ -171,4 +145,3 @@ def build_coach_brief(
         "missing_logs": missing_logs[:4],
         "next_actions": next_actions[:3],
     }
-

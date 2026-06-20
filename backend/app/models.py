@@ -33,7 +33,7 @@ class UserProfile(Base, TimestampMixin):
     fasting_plan: Mapped[str] = mapped_column(String(40), default="16:8")
     enabled_modules: Mapped[str] = mapped_column(
         Text,
-        default='["health","food","exercise","sleep","social","career","bad_habits","finance","reminders"]',
+        default='["health","food","exercise","sleep","career","bad_habits","reminders","journal","expense_tracker"]',
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -44,10 +44,13 @@ class DailyCheckIn(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(Integer, default=1, index=True)
     entry_date: Mapped[date] = mapped_column(Date, index=True)
+    feeling: Mapped[str | None] = mapped_column(String(120), nullable=True)
     mood: Mapped[int | None] = mapped_column(Integer, nullable=True)
     energy: Mapped[int | None] = mapped_column(Integer, nullable=True)
     stress: Mapped[int | None] = mapped_column(Integer, nullable=True)
     day_rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gratitude: Mapped[str | None] = mapped_column(Text, nullable=True)
+    journal_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
@@ -80,6 +83,7 @@ class HealthMetric(Base, TimestampMixin):
     visceral_fat: Mapped[float | None] = mapped_column(Float, nullable=True)
     body_age: Mapped[float | None] = mapped_column(Float, nullable=True)
     bmr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shite_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
@@ -89,6 +93,7 @@ class HabitLog(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(Integer, default=1, index=True)
     entry_date: Mapped[date] = mapped_column(Date, index=True)
+    habit_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     category: Mapped[str] = mapped_column(String(80), index=True)
     name: Mapped[str] = mapped_column(String(120), index=True)
     value: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -107,6 +112,7 @@ class FoodLog(Base, TimestampMixin):
     meal_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     meal_type: Mapped[str] = mapped_column(String(80))
     food_item: Mapped[str] = mapped_column(String(160))
+    post_meal_walk_meters: Mapped[float | None] = mapped_column(Float, nullable=True)
     fasting_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
     fasting_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
     eating_window_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -139,6 +145,21 @@ class FinanceSnapshot(Base, TimestampMixin):
     liability_value: Mapped[float] = mapped_column(Float, default=0)
     monthly_cashflow: Mapped[float | None] = mapped_column(Float, nullable=True)
     renewal_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ExpenseLog(Base, TimestampMixin):
+    __tablename__ = "expense_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    expense_date: Mapped[date] = mapped_column(Date, index=True)
+    expense_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    expense: Mapped[str] = mapped_column(String(160))
+    expense_type: Mapped[str] = mapped_column(String(80), index=True)
+    expense_category: Mapped[str] = mapped_column(String(40), index=True)
+    expense_mode: Mapped[str] = mapped_column(String(80), index=True)
+    cost: Mapped[float] = mapped_column(Float, default=0)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 

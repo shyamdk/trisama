@@ -54,7 +54,7 @@ class AdminUserCreate(BaseModel):
     bp_medication: str = ""
     coaching_tone: str = "firm_practical"
     fasting_plan: str = "16:8"
-    enabled_modules: str = '["health","food","exercise","sleep","social","career","bad_habits","finance","reminders"]'
+    enabled_modules: str = '["health","food","exercise","sleep","career","bad_habits","reminders","journal","expense_tracker"]'
     notes: str | None = None
 
 
@@ -94,10 +94,13 @@ class AdminPasswordResetRequest(BaseModel):
 class DailyCheckInCreate(BaseModel):
     user_id: int | None = None
     entry_date: date = Field(default_factory=date.today)
+    feeling: str | None = Field(default=None, max_length=120)
     mood: int | None = Field(default=None, ge=1, le=10)
     energy: int | None = Field(default=None, ge=1, le=10)
     stress: int | None = Field(default=None, ge=1, le=10)
     day_rating: int | None = Field(default=None, ge=1, le=10)
+    gratitude: str | None = None
+    journal_notes: str | None = None
     notes: str | None = None
 
 
@@ -138,6 +141,7 @@ class HealthMetricCreate(BaseModel):
     visceral_fat: float | None = None
     body_age: float | None = None
     bmr: float | None = None
+    shite_count: int | None = Field(default=None, ge=0, le=100)
     notes: str | None = None
 
 
@@ -151,6 +155,7 @@ class HealthMetricOut(HealthMetricCreate):
 class HabitLogCreate(BaseModel):
     user_id: int | None = None
     entry_date: date = Field(default_factory=date.today)
+    habit_time: time | None = None
     category: str
     name: str
     value: float | None = None
@@ -173,6 +178,7 @@ class FoodLogCreate(BaseModel):
     meal_time: time | None = None
     meal_type: str
     food_item: str = ""
+    post_meal_walk_meters: float | None = Field(default=None, ge=0, le=50000)
     fasting_type: str | None = None
     fasting_hours: float | None = Field(default=None, ge=0, le=48)
     eating_window_hours: float | None = Field(default=None, ge=0, le=24)
@@ -232,6 +238,25 @@ class FinanceSnapshotCreate(BaseModel):
 
 
 class FinanceSnapshotOut(FinanceSnapshotCreate):
+    id: int
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ExpenseLogCreate(BaseModel):
+    user_id: int | None = None
+    expense_date: date = Field(default_factory=date.today)
+    expense_time: time | None = None
+    expense: str
+    expense_type: str
+    expense_category: str
+    expense_mode: str
+    cost: float = Field(default=0, ge=0)
+    notes: str | None = None
+
+
+class ExpenseLogOut(ExpenseLogCreate):
     id: int
     created_at: datetime
 
@@ -322,6 +347,7 @@ class DailyConsolidatedReportOut(BaseModel):
     visceral_fat: float | None = None
     body_age: float | None = None
     bmr: float | None = None
+    shite_count: int | None = None
     food_count: int = 0
     total_calories: float | None = None
     avg_quality_score: float | None = None

@@ -178,6 +178,10 @@ h3 {
   min-height: 118px;
 }
 
+.journal-textarea {
+  min-height: 150px;
+}
+
 .global-timer {
   display: flex;
   align-items: center;
@@ -436,7 +440,7 @@ th {
 }
 
 .food-log-table {
-  min-width: 1120px;
+  min-width: 1200px;
 }
 
 .pill {

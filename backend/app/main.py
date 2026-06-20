@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import secrets
 from datetime import date, datetime, timedelta
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from .database import Base, SessionLocal, engine, get_db
 from .food_ai import apply_food_enrichment, enrich_food_log, food_analysis_for_form
-from .models import AuthSession, Challenge, DailyCheckIn, DailyChecklistItem, DropdownOption, FinanceSnapshot, FoodLog, HabitLog, HealthMetric, Reminder, UserProfile
+from .models import AuthSession, Challenge, DailyCheckIn, DailyChecklistItem, DropdownOption, ExpenseLog, FinanceSnapshot, FoodLog, HabitLog, HealthMetric, Reminder, UserProfile
 from .schemas import (
     AdminPasswordResetRequest,
     AdminUserCreate,
@@ -26,6 +27,8 @@ from .schemas import (
     DashboardOut,
     DropdownOptionCreate,
     DropdownOptionOut,
+    ExpenseLogCreate,
+    ExpenseLogOut,
     FinanceSnapshotCreate,
     FinanceSnapshotOut,
     ForgotPasswordRequest,
@@ -55,8 +58,11 @@ DEFAULT_USER_ID = 1
 DEFAULT_ADMIN_EMAIL = os.getenv("PLOS_DEFAULT_ADMIN_EMAIL")
 DEFAULT_ADMIN_PASSWORD = os.getenv("PLOS_DEFAULT_ADMIN_PASSWORD")
 SESSION_DAYS = 7
-DEFAULT_ENABLED_MODULES = '["health","food","exercise","sleep","social","career","bad_habits","finance","reminders"]'
-UserOwnedModel = TypeVar("UserOwnedModel", DailyCheckIn, DailyChecklistItem, HealthMetric, HabitLog, FoodLog, FinanceSnapshot, Reminder, Challenge)
+DEFAULT_ENABLED_MODULE_KEYS = ["health", "food", "exercise", "sleep", "career", "bad_habits", "reminders", "journal", "expense_tracker"]
+NEW_MODULE_KEYS = {"journal", "expense_tracker"}
+REMOVED_MODULE_KEYS = {"social", "finance"}
+DEFAULT_ENABLED_MODULES = json.dumps(DEFAULT_ENABLED_MODULE_KEYS)
+UserOwnedModel = TypeVar("UserOwnedModel", DailyCheckIn, DailyChecklistItem, HealthMetric, HabitLog, FoodLog, FinanceSnapshot, ExpenseLog, Reminder, Challenge)
 DEFAULT_DAILY_CHECKLIST = [
     ("body_metrics", "Weight / body metrics"),
     ("bp", "BP check-in"),
@@ -65,20 +71,65 @@ DEFAULT_DAILY_CHECKLIST = [
     ("exercise", "Exercise / movement"),
     ("sleep", "Sleep log"),
     ("bad_habits", "Bad habits check"),
+    ("journal", "Journal"),
 ]
+POST_MEAL_WALK_REQUIRED_MEALS = {"Breakfast", "Lunch", "Dinner"}
 DEFAULT_DROPDOWN_OPTIONS = {
     "role": ["user", "admin"],
     "coaching_tone": ["firm_practical", "gentle_supportive", "hard_accountability"],
     "fasting_plan": ["16:8", "18:6", "Full day", "Custom"],
     "sugar_context": ["Fasting", "PP", "Random"],
     "meal_type": ["Breakfast", "Lunch", "Dinner", "Snack", "Fasting"],
-    "exercise_name": ["Walking", "Pranayama", "Meditation", "Yoga", "Strength Training", "Weekend Cardio"],
+    "physical_exercise_name": ["Yoga", "Walking", "Cycling", "Strength Training"],
+    "mind_exercise_name": ["Meditation", "Pranayama"],
+    "spirit_exercise_name": ["Vishnu Sahasranamam"],
     "sleep_name": ["Sleep Duration", "Sleep Quality", "Bed Time Consistency"],
-    "social_name": ["Call Friend", "Meet Friend/Cousin", "Bike Ride", "Comfort Zone Challenge"],
     "career_name": ["Job Application", "Interview", "Learning Session", "Networking"],
     "bad_habit_name": ["Direct Sugar", "Processed Food", "Refined Food", "Smoking", "Alcohol", "Social Media"],
-    "finance_kind": ["property", "bank_account", "investment", "pf_retirement", "insurance", "liability", "expense", "trading"],
-    "reminder_category": ["health", "food", "exercise", "sleep", "finance", "insurance", "social", "career"],
+    "expense_type": [
+        "Groceries",
+        "Food & Dining",
+        "Rent",
+        "Utilities",
+        "Fuel",
+        "Transport",
+        "Medical",
+        "Insurance",
+        "Education",
+        "Entertainment",
+        "Shopping",
+        "Travel",
+        "Investments",
+        "EMI/Loan",
+        "Subscriptions",
+        "Gifts & Donations",
+        "Household",
+        "Personal Care",
+        "Clothing",
+        "Electronics",
+        "Fitness",
+        "Health Supplements",
+        "Mobile & Internet",
+        "Electricity",
+        "Water",
+        "Gas",
+        "Home Maintenance",
+        "Vehicle Maintenance",
+        "Parking",
+        "Tolls",
+        "Taxes",
+        "Professional Fees",
+        "Child Education",
+        "Pet Care",
+        "Charity",
+        "Festivals",
+        "Vacation",
+        "Business Expenses",
+        "Miscellaneous",
+    ],
+    "expense_category": ["need", "want", "give"],
+    "expense_mode": ["UPI", "Credit Card", "Debit Card", "Cash", "Net Banking", "Wallet", "Auto Debit", "Cheque"],
+    "reminder_category": ["health", "food", "exercise", "sleep", "insurance", "career"],
     "reminder_channel": ["app", "telegram"],
 }
 
@@ -112,6 +163,7 @@ def startup() -> None:
     with SessionLocal() as db:
         ensure_user_columns(db)
         ensure_user(db)
+        ensure_all_enabled_modules(db)
         ensure_dropdown_options(db)
         db.commit()
 
@@ -124,10 +176,11 @@ def ensure_user(db: Session) -> UserProfile:
         if not profile.password_hash and DEFAULT_ADMIN_PASSWORD:
             profile.password_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
         profile.must_change_password = True if profile.must_change_password is None else profile.must_change_password
-        profile.enabled_modules = profile.enabled_modules or DEFAULT_ENABLED_MODULES
+        profile.enabled_modules = ensure_enabled_modules(profile.enabled_modules)
         return profile
     profile = db.query(UserProfile).first()
     if profile:
+        profile.enabled_modules = ensure_enabled_modules(profile.enabled_modules)
         return profile
     profile = UserProfile(
         id=DEFAULT_USER_ID,
@@ -147,6 +200,33 @@ def ensure_user(db: Session) -> UserProfile:
     db.add(profile)
     db.flush()
     return profile
+
+
+def ensure_enabled_modules(enabled_modules: str | None) -> str:
+    if not enabled_modules:
+        return DEFAULT_ENABLED_MODULES
+    try:
+        enabled = json.loads(enabled_modules)
+    except json.JSONDecodeError:
+        return DEFAULT_ENABLED_MODULES
+    if not isinstance(enabled, list):
+        return DEFAULT_ENABLED_MODULES
+    normalized = []
+    for item in enabled:
+        module = str(item)
+        if module in REMOVED_MODULE_KEYS:
+            continue
+        if module not in normalized:
+            normalized.append(module)
+    for module in NEW_MODULE_KEYS:
+        if module not in normalized:
+            normalized.append(module)
+    return json.dumps(normalized)
+
+
+def ensure_all_enabled_modules(db: Session) -> None:
+    for profile in db.query(UserProfile).all():
+        profile.enabled_modules = ensure_enabled_modules(profile.enabled_modules)
 
 
 def ensure_user_columns(db: Session) -> None:
@@ -182,6 +262,7 @@ def ensure_user_columns(db: Session) -> None:
     food_alters = {
         "fasting_type": "ALTER TABLE food_logs ADD COLUMN fasting_type VARCHAR(40)",
         "meal_time": "ALTER TABLE food_logs ADD COLUMN meal_time TIME",
+        "post_meal_walk_meters": "ALTER TABLE food_logs ADD COLUMN post_meal_walk_meters FLOAT",
         "fasting_hours": "ALTER TABLE food_logs ADD COLUMN fasting_hours FLOAT",
         "eating_window_hours": "ALTER TABLE food_logs ADD COLUMN eating_window_hours FLOAT",
         "ai_enriched": "ALTER TABLE food_logs ADD COLUMN ai_enriched BOOLEAN NOT NULL DEFAULT 0",
@@ -193,11 +274,30 @@ def ensure_user_columns(db: Session) -> None:
         if column not in food_columns:
             db.connection().exec_driver_sql(statement)
 
+    checkin_columns = {row[1] for row in db.connection().exec_driver_sql("PRAGMA table_info(daily_checkins)")}
+    checkin_alters = {
+        "feeling": "ALTER TABLE daily_checkins ADD COLUMN feeling VARCHAR(120)",
+        "gratitude": "ALTER TABLE daily_checkins ADD COLUMN gratitude TEXT",
+        "journal_notes": "ALTER TABLE daily_checkins ADD COLUMN journal_notes TEXT",
+    }
+    for column, statement in checkin_alters.items():
+        if column not in checkin_columns:
+            db.connection().exec_driver_sql(statement)
+
     health_columns = {row[1] for row in db.connection().exec_driver_sql("PRAGMA table_info(health_metrics)")}
     if "measurement_time" not in health_columns:
         db.connection().exec_driver_sql("ALTER TABLE health_metrics ADD COLUMN measurement_time TIME")
     if "sugar_context" not in health_columns:
         db.connection().exec_driver_sql("ALTER TABLE health_metrics ADD COLUMN sugar_context VARCHAR(40)")
+    if "shite_count" not in health_columns:
+        db.connection().exec_driver_sql("ALTER TABLE health_metrics ADD COLUMN shite_count INTEGER")
+
+    habit_columns = {row[1] for row in db.connection().exec_driver_sql("PRAGMA table_info(habit_logs)")}
+    if "habit_time" not in habit_columns:
+        db.connection().exec_driver_sql("ALTER TABLE habit_logs ADD COLUMN habit_time TIME")
+
+    db.connection().exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_expense_logs_user_id ON expense_logs (user_id)")
+    db.connection().exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_expense_logs_expense_date ON expense_logs (expense_date)")
 
 
 def ensure_dropdown_options(db: Session) -> None:
@@ -236,6 +336,16 @@ def user_query(db: Session, model: type[UserOwnedModel], user_id: int):
     return db.query(model).filter(model.user_id == user_id)
 
 
+def require_post_meal_walk(food_payload: dict) -> None:
+    meal_type = food_payload.get("meal_type")
+    walk_meters = food_payload.get("post_meal_walk_meters")
+    if meal_type in POST_MEAL_WALK_REQUIRED_MEALS and (walk_meters is None or walk_meters <= 0):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Post-meal walk distance in meters is required for Breakfast, Lunch, and Dinner.",
+        )
+
+
 def ensure_daily_checklist(db: Session, user_id: int, entry_date: date) -> list[DailyChecklistItem]:
     active_keys = {key for key, _label in DEFAULT_DAILY_CHECKLIST}
     existing = {
@@ -265,6 +375,10 @@ def infer_daily_checklist_completion(db: Session, user_id: int, entry_date: date
         is not None
     )
     habit_categories = {row.category for row in habit_rows}
+    journal_exists = any(
+        row.feeling or row.mood is not None or row.gratitude or row.journal_notes or row.notes
+        for row in user_query(db, DailyCheckIn, user_id).filter(DailyCheckIn.entry_date == entry_date).all()
+    )
     return {
         "body_metrics": any(
             value is not None
@@ -284,6 +398,7 @@ def infer_daily_checklist_completion(db: Session, user_id: int, entry_date: date
         "exercise": bool(habit_categories & {"exercise", "mind"}),
         "sleep": "sleep" in habit_categories,
         "bad_habits": bool(habit_categories & {"bad_habit", "bad_habits"}),
+        "journal": journal_exists,
     }
 
 
@@ -649,13 +764,14 @@ def create_habit(payload: HabitLogCreate, user_id: int = Query(DEFAULT_USER_ID),
 
 @app.get("/habits", response_model=list[HabitLogOut])
 def list_habits(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> list[HabitLog]:
-    return user_query(db, HabitLog, user_id).order_by(desc(HabitLog.entry_date)).limit(100).all()
+    return user_query(db, HabitLog, user_id).order_by(desc(HabitLog.entry_date), desc(HabitLog.habit_time)).limit(100).all()
 
 
 @app.post("/foods", response_model=FoodLogOut)
 def create_food(payload: FoodLogCreate, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> FoodLog:
     get_user(db, user_id)
     food_payload = payload.model_dump()
+    require_post_meal_walk(food_payload)
     profile = get_user(db, user_id)
     food_payload["fasting_type"] = profile.fasting_plan
     analysis = enrich_food_log(food_payload.get("food_item") or "", food_payload.get("meal_type") or "", food_payload.get("notes"))
@@ -681,6 +797,7 @@ def update_food(
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Food log not found")
     food_payload = payload.model_dump()
+    require_post_meal_walk(food_payload)
     food_payload["fasting_type"] = profile.fasting_plan
     analysis = enrich_food_log(food_payload.get("food_item") or "", food_payload.get("meal_type") or "", food_payload.get("notes"))
     if analysis:
@@ -748,6 +865,21 @@ def create_finance_snapshot(
 @app.get("/finance-snapshots", response_model=list[FinanceSnapshotOut])
 def list_finance_snapshots(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> list[FinanceSnapshot]:
     return user_query(db, FinanceSnapshot, user_id).order_by(desc(FinanceSnapshot.entry_date)).limit(200).all()
+
+
+@app.post("/expenses", response_model=ExpenseLogOut)
+def create_expense(payload: ExpenseLogCreate, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> ExpenseLog:
+    get_user(db, user_id)
+    item = ExpenseLog(**with_user(payload.model_dump(), user_id))
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.get("/expenses", response_model=list[ExpenseLogOut])
+def list_expenses(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> list[ExpenseLog]:
+    return user_query(db, ExpenseLog, user_id).order_by(desc(ExpenseLog.expense_date), desc(ExpenseLog.expense_time)).limit(200).all()
 
 
 @app.post("/reminders", response_model=ReminderOut)
@@ -902,10 +1034,12 @@ def build_daily_reports(
                 for value in [row.body_fat_percent, row.muscle_percent, row.visceral_fat, row.body_age, row.bmr]
             )
         ]
+        shite_rows = [row for row in date_health if row.shite_count is not None]
         latest_weight = max(weight_rows, key=health_sort_key) if weight_rows else None
         latest_bp = max(bp_rows, key=health_sort_key) if bp_rows else None
         latest_sugar = max(sugar_rows, key=health_sort_key) if sugar_rows else None
         latest_body = max(body_rows, key=health_sort_key) if body_rows else None
+        latest_shite = max(shite_rows, key=health_sort_key) if shite_rows else None
 
         date_foods = [row for row in foods if row.entry_date == entry_date]
         quality_scores = [row.quality_score for row in date_foods if row.quality_score is not None]
@@ -927,6 +1061,17 @@ def build_daily_reports(
         date_finance = [row for row in finance if row.entry_date == entry_date]
         date_reminders = [row for row in reminders if row.due_date == entry_date]
         date_checkins = [row for row in checkins if row.entry_date == entry_date]
+        journal_notes = [
+            item
+            for row in date_checkins
+            for item in [
+                f"Feeling: {row.feeling}" if row.feeling else None,
+                f"Gratitude: {row.gratitude}" if row.gratitude else None,
+                f"Journal: {row.journal_notes}" if row.journal_notes else None,
+                row.notes,
+            ]
+            if item
+        ]
         notes = [
             note
             for note in [
@@ -935,7 +1080,7 @@ def build_daily_reports(
                 *[row.notes for row in date_habits],
                 *[row.notes for row in date_finance],
                 *[row.notes for row in date_reminders],
-                *[row.notes for row in date_checkins],
+                *journal_notes,
             ]
             if note
         ]
@@ -953,18 +1098,22 @@ def build_daily_reports(
                 "visceral_fat": latest_body.visceral_fat if latest_body else None,
                 "body_age": latest_body.body_age if latest_body else None,
                 "bmr": latest_body.bmr if latest_body else None,
+                "shite_count": latest_shite.shite_count if latest_shite else None,
                 "food_count": len(date_foods),
                 "total_calories": sum(calories) if calories else None,
                 "avg_quality_score": round(sum(quality_scores) / len(quality_scores), 1) if quality_scores else None,
                 "food_items": [
-                    f"{row.meal_type}: {row.food_item}" + (f" ({row.calories:.0f} cal)" if row.calories is not None else "")
+                    f"{row.meal_type}: {row.food_item}"
+                    + (f" ({row.calories:.0f} cal)" if row.calories is not None else "")
+                    + (f", walk {row.post_meal_walk_meters:.0f} m" if row.post_meal_walk_meters else "")
                     for row in sorted(date_foods, key=lambda item: item.meal_time or datetime.min.time())
                 ],
                 "food_flags": food_flags,
                 "habits_done": sum(1 for row in date_habits if row.completed),
                 "habits_total": len(date_habits),
                 "habit_items": [
-                    f"{row.name}: {row.value if row.value is not None else '-'} {row.unit or ''}".strip()
+                    (f"{row.habit_time} " if row.habit_time else "")
+                    + f"{row.name}: {row.value if row.value is not None else '-'} {row.unit or ''}".strip()
                     + (" done" if row.completed else "")
                     for row in date_habits
                 ],
@@ -1009,8 +1158,6 @@ def get_report(period: str, user_id: int = Query(DEFAULT_USER_ID), db: Session =
         if fasting_logs:
             avg_fast = sum((item.fasting_hours or 0) for item in fasting_logs) / len(fasting_logs)
             trends.append(f"Fasting tracked {len(fasting_logs)} times; average fast: {avg_fast:.1f} hours.")
-    if finance:
-        trends.append(f"Current tracked net worth: Rs {finance_summary['net_worth']:.0f}.")
     if habits:
         completed = sum(1 for item in habits if item.completed)
         trends.append(f"Habit completion: {completed}/{len(habits)} logged items.")
