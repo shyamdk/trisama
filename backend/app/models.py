@@ -33,7 +33,7 @@ class UserProfile(Base, TimestampMixin):
     fasting_plan: Mapped[str] = mapped_column(String(40), default="16:8")
     enabled_modules: Mapped[str] = mapped_column(
         Text,
-        default='["health","food","exercise","sleep","career","bad_habits","reminders","journal","expense_tracker"]',
+        default='["health","food","exercise","sleep","career","bad_habits","reminders","journal","expense_tracker","meds"]',
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -160,6 +160,17 @@ class ExpenseLog(Base, TimestampMixin):
     expense_category: Mapped[str] = mapped_column(String(40), index=True)
     expense_mode: Mapped[str] = mapped_column(String(80), index=True)
     cost: Mapped[float] = mapped_column(Float, default=0)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class MedLog(Base, TimestampMixin):
+    __tablename__ = "med_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    med_date: Mapped[date] = mapped_column(Date, index=True)
+    med_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    med_name: Mapped[str] = mapped_column(String(160), index=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 

@@ -54,7 +54,7 @@ class AdminUserCreate(BaseModel):
     bp_medication: str = ""
     coaching_tone: str = "firm_practical"
     fasting_plan: str = "16:8"
-    enabled_modules: str = '["health","food","exercise","sleep","career","bad_habits","reminders","journal","expense_tracker"]'
+    enabled_modules: str = '["health","food","exercise","sleep","career","bad_habits","reminders","journal","expense_tracker","meds"]'
     notes: str | None = None
 
 
@@ -263,6 +263,21 @@ class ExpenseLogOut(ExpenseLogCreate):
     model_config = {"from_attributes": True}
 
 
+class MedLogCreate(BaseModel):
+    user_id: int | None = None
+    med_date: date = Field(default_factory=date.today)
+    med_time: time | None = None
+    med_name: str
+    notes: str | None = None
+
+
+class MedLogOut(MedLogCreate):
+    id: int
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class ReminderCreate(BaseModel):
     user_id: int | None = None
     title: str
@@ -284,6 +299,12 @@ class ReminderOut(ReminderCreate):
 class DropdownOptionCreate(BaseModel):
     dropdown_key: str = Field(min_length=1, max_length=80)
     value: str = Field(min_length=1, max_length=160)
+    label: str | None = Field(default=None, max_length=160)
+    sort_order: int | None = None
+
+
+class DropdownOptionUpdate(BaseModel):
+    value: str | None = Field(default=None, min_length=1, max_length=160)
     label: str | None = Field(default=None, max_length=160)
     sort_order: int | None = None
 

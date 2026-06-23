@@ -174,6 +174,16 @@ export type ExpenseLog = {
   created_at: string;
 };
 
+export type MedLog = {
+  id: number;
+  user_id: number;
+  med_date: string;
+  med_time: string | null;
+  med_name: string;
+  notes: string | null;
+  created_at: string;
+};
+
 export type Reminder = {
   id: number;
   title: string;

@@ -12,6 +12,7 @@ import {
   HabitLog,
   HealthMetric,
   LoginResponse,
+  MedLog,
   Reminder,
   Report,
   UserProfile,
@@ -26,12 +27,13 @@ import {
   userPath,
 } from "@/lib/api";
 
-const baseTabs = ["Dashboard", "Profile", "Journal", "Health", "Food", "Exercise", "Sleep", "Career", "Bad Habits", "Expense Tracker", "Reminders", "Reports"];
-const fastingTimerStorageKey = "plos_fasting_countdown";
-const fastingTimerClearedKey = "plos_fasting_countdown_cleared_at";
+const baseTabs = ["Dashboard", "Profile", "Journal", "Health", "Meds", "Food", "Exercise", "Sleep", "Career", "Bad Habits", "Expense Tracker", "Reminders", "Reports"];
+const legacyFastingTimerStorageKey = "plos_fasting_countdown";
+const legacyFastingTimerClearedKey = "plos_fasting_countdown_cleared_at";
 const expiredFastingPromptMs = 12 * 60 * 60 * 1000;
 const moduleOptions = [
   { key: "health", label: "Health" },
+  { key: "meds", label: "Meds" },
   { key: "food", label: "Food" },
   { key: "exercise", label: "Exercise" },
   { key: "sleep", label: "Sleep" },
@@ -46,6 +48,7 @@ const tabModule: Record<string, string | null> = {
   Profile: null,
   Journal: "journal",
   Health: "health",
+  Meds: "meds",
   Food: "food",
   Exercise: "exercise",
   Sleep: "sleep",
@@ -111,6 +114,7 @@ const defaultDropdownOptions: Record<string, string[]> = {
   ],
   expense_category: ["need", "want", "give"],
   expense_mode: ["UPI", "Credit Card", "Debit Card", "Cash", "Net Banking", "Wallet", "Auto Debit", "Cheque"],
+  med_name: ["Tazloc CT 40"],
   reminder_category: ["health", "food", "exercise", "sleep", "insurance", "career"],
   reminder_channel: ["app", "telegram"],
 };
@@ -129,11 +133,13 @@ const dropdownLabels: Record<string, string> = {
   expense_type: "Expense type",
   expense_category: "Expense category",
   expense_mode: "Expense mode",
+  med_name: "Medicine",
   reminder_category: "Reminder category",
   reminder_channel: "Reminder channel",
 };
 
 type FastingCountdown = {
+  userId: number;
   plan: string;
   mealType?: string | null;
   startAt: number;
@@ -175,7 +181,10 @@ function setCheckboxValue(form: HTMLFormElement, key: string, checked: boolean) 
 function isoDate(offsetDays = 0) {
   const value = new Date();
   value.setDate(value.getDate() + offsetDays);
-  return value.toISOString().slice(0, 10);
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function currentTime() {
@@ -224,6 +233,15 @@ function requiresPostMealWalk(mealType: string | null | undefined) {
   return mealType === "Breakfast" || mealType === "Lunch" || mealType === "Dinner";
 }
 
+function fastingTimerClearedKey(userId: number) {
+  return `${legacyFastingTimerClearedKey}:${userId}`;
+}
+
+function removeLegacyFastingTimerStorage() {
+  window.localStorage.removeItem(legacyFastingTimerStorageKey);
+  window.localStorage.removeItem(legacyFastingTimerClearedKey);
+}
+
 function localTimestamp(entryDate: string | null, entryTime: string | null) {
   if (!entryDate) return Date.now();
   const time = entryTime || currentTime();
@@ -231,8 +249,12 @@ function localTimestamp(entryDate: string | null, entryTime: string | null) {
   return Number.isNaN(parsed.getTime()) ? Date.now() : parsed.getTime();
 }
 
-function fastingCountdownFromLatestMeal(foods: FoodLog[], plan: string, clearedAt: number) {
-  const mealRows = foods.filter((row) => row.meal_type && row.meal_type !== "Fasting");
+function fastingCountdownFromLatestMeal(foods: FoodLog[], plan: string, clearedAt: number, userId: number) {
+  const now = Date.now();
+  const mealRows = foods.filter((row) => {
+    if (!row.meal_type || row.meal_type === "Fasting") return false;
+    return localTimestamp(row.entry_date, row.meal_time) <= now + 2 * 60 * 1000;
+  });
   if (!mealRows.length) return null;
   const latest = mealRows.reduce((current, row) => {
     const rowTime = localTimestamp(row.entry_date, row.meal_time);
@@ -244,7 +266,7 @@ function fastingCountdownFromLatestMeal(foods: FoodLog[], plan: string, clearedA
   if (!durationHours) return null;
   const targetAt = startAt + durationHours * 60 * 60 * 1000;
   if (startAt <= clearedAt || targetAt <= Date.now() - expiredFastingPromptMs) return null;
-  return { plan, mealType: latest.meal_type, startAt, targetAt };
+  return { userId, plan, mealType: latest.meal_type, startAt, targetAt };
 }
 
 function enabledModules(user: UserProfile | null) {
@@ -275,6 +297,11 @@ function dropdownGrouped(options: DropdownOption[]) {
   }));
 }
 
+function isSessionError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return ["Invalid or expired session", "Missing session token", "Session user not found"].some((message) => error.message.includes(message));
+}
+
 export default function Home() {
   const [active, setActive] = useState("Dashboard");
   const [user, setUser] = useState<UserProfile | null>(null);
@@ -287,6 +314,7 @@ export default function Home() {
   const [checkins, setCheckins] = useState<DailyCheckIn[]>([]);
   const [dailyChecklist, setDailyChecklist] = useState<DailyChecklistItem[]>([]);
   const [health, setHealth] = useState<HealthMetric[]>([]);
+  const [meds, setMeds] = useState<MedLog[]>([]);
   const [habits, setHabits] = useState<HabitLog[]>([]);
   const [foods, setFoods] = useState<FoodLog[]>([]);
   const [expenses, setExpenses] = useState<ExpenseLog[]>([]);
@@ -312,6 +340,22 @@ export default function Home() {
     }, {});
   }, [habits]);
 
+  function resetUserScopedState() {
+    setDashboard(null);
+    setCheckins([]);
+    setDailyChecklist([]);
+    setHealth([]);
+    setMeds([]);
+    setHabits([]);
+    setFoods([]);
+    setExpenses([]);
+    setReminders([]);
+    setReport(null);
+    setAdminUsers([]);
+    setFastingCountdown(null);
+    setFastingTimerMode("remaining");
+  }
+
   async function loadAll(userOverride?: UserProfile, tokenOverride?: string) {
     const activeUser = userOverride ?? user;
     const activeToken = tokenOverride ?? token;
@@ -319,11 +363,12 @@ export default function Home() {
     setLoading(true);
     try {
       const currentUserId = activeUser.id;
-      const [dash, checkinRows, checklistRows, healthRows, habitRows, foodRows, expenseRows, reminderRows, weeklyReport, userProfile, dropdownRows] = await Promise.all([
+      const [dash, checkinRows, checklistRows, healthRows, medRows, habitRows, foodRows, expenseRows, reminderRows, weeklyReport, userProfile, dropdownRows] = await Promise.all([
         apiGet<Dashboard>(userPath("/dashboard", currentUserId)),
         apiGet<DailyCheckIn[]>(userPath("/checkins", currentUserId)),
         apiGet<DailyChecklistItem[]>(userPath(`/daily-checklist?entry_date=${isoDate()}`, currentUserId)),
         apiGet<HealthMetric[]>(userPath("/health-metrics", currentUserId)),
+        apiGet<MedLog[]>(userPath("/meds", currentUserId)),
         apiGet<HabitLog[]>(userPath("/habits", currentUserId)),
         apiGet<FoodLog[]>(userPath("/foods", currentUserId)),
         apiGet<ExpenseLog[]>(userPath("/expenses", currentUserId)),
@@ -336,6 +381,7 @@ export default function Home() {
       setCheckins(checkinRows);
       setDailyChecklist(checklistRows);
       setHealth(healthRows);
+      setMeds(medRows);
       setHabits(habitRows);
       setFoods(foodRows);
       setExpenses(expenseRows);
@@ -347,11 +393,11 @@ export default function Home() {
         try {
           setAdminUsers(await apiGetAuth<UserProfile[]>("/admin/users", activeToken));
         } catch (error) {
-          if (error instanceof Error && error.message.includes("Invalid or expired session")) {
-            setAdminUsers([]);
-          } else {
-            throw error;
+          if (isSessionError(error)) {
+            expireSession();
+            return;
           }
+          throw error;
         }
       }
     } finally {
@@ -373,18 +419,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(fastingTimerStorageKey);
-    if (!stored) return;
-    try {
-      const parsed = JSON.parse(stored) as FastingCountdown;
-      if (parsed.targetAt > Date.now() - expiredFastingPromptMs) {
-        setFastingCountdown(parsed);
-      } else {
-        window.localStorage.removeItem(fastingTimerStorageKey);
-      }
-    } catch {
-      window.localStorage.removeItem(fastingTimerStorageKey);
-    }
+    removeLegacyFastingTimerStorage();
   }, []);
 
   useEffect(() => {
@@ -393,22 +428,36 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!user || !foods.length) return;
-    const clearedAt = Number(window.localStorage.getItem(fastingTimerClearedKey) ?? 0);
-    const derived = fastingCountdownFromLatestMeal(foods, user.fasting_plan ?? "16:8", clearedAt);
-    if (!derived) return;
-    if (fastingCountdown && fastingCountdown.startAt > derived.startAt) return;
-    if (fastingCountdown && fastingCountdown.startAt === derived.startAt && fastingCountdown.targetAt === derived.targetAt) return;
+    if (!user) return;
+    if (!foods.length) {
+      setFastingCountdown(null);
+      return;
+    }
+    const clearedAt = Number(window.localStorage.getItem(fastingTimerClearedKey(user.id)) ?? 0);
+    const derived = fastingCountdownFromLatestMeal(foods, user.fasting_plan ?? "16:8", clearedAt, user.id);
+    if (!derived) {
+      setFastingCountdown(null);
+      return;
+    }
+    if (
+      fastingCountdown &&
+      fastingCountdown.userId === derived.userId &&
+      fastingCountdown.startAt === derived.startAt &&
+      fastingCountdown.targetAt === derived.targetAt
+    ) {
+      return;
+    }
     setFastingCountdown(derived);
-    window.localStorage.setItem(fastingTimerStorageKey, JSON.stringify(derived));
-  }, [foods, user, fastingCountdown]);
+  }, [foods, user?.id, user?.fasting_plan, fastingCountdown]);
 
   function startFastingCountdown(entryDate: string | null, entryTime: string | null, mealType: string | null) {
+    if (!user) return;
     const plan = user?.fasting_plan ?? "16:8";
     const durationHours = timerDurationHoursForMeal(mealType, plan);
     if (!durationHours) return;
     const startAt = localTimestamp(entryDate, entryTime);
     const nextCountdown = {
+      userId: user.id,
       plan,
       mealType,
       startAt,
@@ -416,14 +465,15 @@ export default function Home() {
     };
     setFastingCountdown(nextCountdown);
     setFastingTimerMode("remaining");
-    window.localStorage.removeItem(fastingTimerClearedKey);
-    window.localStorage.setItem(fastingTimerStorageKey, JSON.stringify(nextCountdown));
+    window.localStorage.removeItem(fastingTimerClearedKey(user.id));
   }
 
   function clearFastingCountdown() {
     setFastingCountdown(null);
-    window.localStorage.setItem(fastingTimerClearedKey, String(Date.now()));
-    window.localStorage.removeItem(fastingTimerStorageKey);
+    if (user) {
+      window.localStorage.setItem(fastingTimerClearedKey(user.id), String(Date.now()));
+    }
+    removeLegacyFastingTimerStorage();
   }
 
   async function save(path: string, payload: unknown, form: HTMLFormElement) {
@@ -470,6 +520,17 @@ export default function Home() {
       body_age: numeric(form, "body_age"),
       bmr: numeric(form, "bmr"),
       shite_count: numeric(form, "shite_count"),
+      notes: text(form, "notes"),
+    }, event.currentTarget);
+  }
+
+  async function submitMed(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await save("/meds", {
+      med_date: text(form, "med_date"),
+      med_time: text(form, "med_time"),
+      med_name: text(form, "med_name"),
       notes: text(form, "notes"),
     }, event.currentTarget);
   }
@@ -637,6 +698,8 @@ export default function Home() {
         email: text(form, "email"),
         password: text(form, "password"),
       });
+      resetUserScopedState();
+      removeLegacyFastingTimerStorage();
       setToken(response.token);
       setUser(response.user);
       window.localStorage.setItem("plos_token", response.token);
@@ -654,9 +717,15 @@ export default function Home() {
     window.localStorage.removeItem("plos_user");
     setToken(null);
     setUser(null);
-    setDashboard(null);
-    setCheckins([]);
+    resetUserScopedState();
+    removeLegacyFastingTimerStorage();
     setActive("Dashboard");
+  }
+
+  function expireSession() {
+    logout();
+    setAuthMode("login");
+    setAuthMessage("Your admin session expired. Log in again, then retry the dropdown change.");
   }
 
   async function submitForgot(event: FormEvent<HTMLFormElement>) {
@@ -735,6 +804,7 @@ export default function Home() {
       {active === "Profile" && user && <ProfileView user={user} dropdownOptions={dropdownOptions} saving={saving} submitProfile={submitProfile} submitChangePassword={submitChangePassword} />}
       {active === "Journal" && <JournalView checkins={checkins} saving={saving} submitJournal={submitJournal} />}
       {active === "Health" && <HealthView health={health} dropdownOptions={dropdownOptions} saving={saving} submitHealthMetric={submitHealthMetric} />}
+      {active === "Meds" && <MedsView meds={meds} dropdownOptions={dropdownOptions} saving={saving} submitMed={submitMed} />}
       {active === "Food" && <FoodView foods={foods} dropdownOptions={dropdownOptions} fastingPlan={user.fasting_plan ?? "16:8"} calorieTarget={user.daily_calorie_target ?? 1800} saving={saving} submitFood={submitFood} deleteFood={deleteFood} />}
       {active === "Exercise" && <ExerciseView rows={[...(habitsByCategory.exercise ?? []), ...(habitsByCategory.mind ?? [])]} dropdownOptions={dropdownOptions} saving={saving} submitHabit={submitHabit} />}
       {active === "Sleep" && <HabitView title="Sleep" category="sleep" rows={habitsByCategory.sleep ?? []} saving={saving} submitHabit={submitHabit} presets={dropdownValues(dropdownOptions, "sleep_name")} />}
@@ -743,7 +813,7 @@ export default function Home() {
       {active === "Expense Tracker" && <ExpenseTrackerView expenses={expenses} dropdownOptions={dropdownOptions} saving={saving} submitExpense={submitExpense} />}
       {active === "Reminders" && <ReminderView reminders={reminders} dropdownOptions={dropdownOptions} saving={saving} submitReminder={submitReminder} />}
       {active === "Reports" && report && <ReportView report={report} userId={user.id} setReport={setReport} />}
-      {active === "Admin" && user.role === "admin" && token && <AdminView users={adminUsers} dropdownOptions={dropdownOptions} token={token} saving={saving} setSaving={setSaving} reload={() => loadAll()} setDropdownOptions={setDropdownOptions} />}
+      {active === "Admin" && user.role === "admin" && token && <AdminView users={adminUsers} dropdownOptions={dropdownOptions} token={token} saving={saving} setSaving={setSaving} reload={() => loadAll()} setDropdownOptions={setDropdownOptions} onAuthExpired={expireSession} />}
     </main>
   );
 }
@@ -990,6 +1060,26 @@ function HealthView({ health, dropdownOptions, saving, submitHealthMetric }: { h
         </form>
       </Panel>
       <Panel title="Recent Health Logs"><HealthTable rows={health} /></Panel>
+    </div>
+  );
+}
+
+function MedsView({ meds, dropdownOptions, saving, submitMed }: { meds: MedLog[]; dropdownOptions: DropdownOption[]; saving: boolean; submitMed: (event: FormEvent<HTMLFormElement>) => void }) {
+  const medOptions = dropdownValues(dropdownOptions, "med_name");
+  return (
+    <div className="grid two">
+      <Panel title="Meds Entry">
+        <form className="section" onSubmit={submitMed}>
+          <div className="form-grid">
+            <label>Date<input name="med_date" type="date" defaultValue={isoDate()} min={isoDate(-2)} max={isoDate()} required /></label>
+            <label>Time<input name="med_time" type="time" defaultValue={currentTime()} required /></label>
+            <label>Meds<select name="med_name" required>{medOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+          </div>
+          <label>Notes<textarea name="notes" /></label>
+          <button className="button" disabled={saving}>Save Meds</button>
+        </form>
+      </Panel>
+      <Panel title="Recent Meds"><MedTable rows={meds} /></Panel>
     </div>
   );
 }
@@ -1354,7 +1444,7 @@ function ReminderView({ reminders, dropdownOptions, saving, submitReminder }: { 
   );
 }
 
-function AdminView({ users, dropdownOptions, token, saving, setSaving, reload, setDropdownOptions }: {
+function AdminView({ users, dropdownOptions, token, saving, setSaving, reload, setDropdownOptions, onAuthExpired }: {
   users: UserProfile[];
   dropdownOptions: DropdownOption[];
   token: string;
@@ -1362,8 +1452,10 @@ function AdminView({ users, dropdownOptions, token, saving, setSaving, reload, s
   setSaving: (saving: boolean) => void;
   reload: () => Promise<void>;
   setDropdownOptions: (options: DropdownOption[]) => void;
+  onAuthExpired: () => void;
 }) {
   const [message, setMessage] = useState("");
+  const [editingDropdown, setEditingDropdown] = useState<{ id: number; value: string; label: string } | null>(null);
   const roleOptions = dropdownValues(dropdownOptions, "role");
   const coachingToneOptions = dropdownValues(dropdownOptions, "coaching_tone");
   const fastingPlanOptions = dropdownValues(dropdownOptions, "fasting_plan");
@@ -1392,6 +1484,10 @@ function AdminView({ users, dropdownOptions, token, saving, setSaving, reload, s
       setMessage("User created. Share the default password and ask them to change it after login.");
       await reload();
     } catch (error) {
+      if (isSessionError(error)) {
+        onAuthExpired();
+        return;
+      }
       setMessage(error instanceof Error ? error.message : "Could not create user.");
       await reload();
     } finally {
@@ -1408,6 +1504,12 @@ function AdminView({ users, dropdownOptions, token, saving, setSaving, reload, s
       await apiPostAuth(`/admin/users/${userId}/reset-password`, { new_password: newPassword }, token);
       setMessage("Password reset. Share the temporary password securely.");
       await reload();
+    } catch (error) {
+      if (isSessionError(error)) {
+        onAuthExpired();
+        return;
+      }
+      setMessage(error instanceof Error ? error.message : "Could not reset password.");
     } finally {
       setSaving(false);
     }
@@ -1417,7 +1519,7 @@ function AdminView({ users, dropdownOptions, token, saving, setSaving, reload, s
     setDropdownOptions(await apiGet<DropdownOption[]>("/dropdown-options"));
   }
 
-  async function submitDropdownOption(event: FormEvent<HTMLFormElement>) {
+  async function submitDropdownOption(event: FormEvent<HTMLFormElement>, dropdownKeyOverride?: string) {
     event.preventDefault();
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
@@ -1425,7 +1527,7 @@ function AdminView({ users, dropdownOptions, token, saving, setSaving, reload, s
     setMessage("");
     try {
       await apiPostAuth<DropdownOption>("/admin/dropdown-options", {
-        dropdown_key: text(form, "dropdown_key"),
+        dropdown_key: dropdownKeyOverride ?? text(form, "dropdown_key"),
         value: text(form, "value"),
         label: text(form, "label"),
       }, token);
@@ -1433,7 +1535,34 @@ function AdminView({ users, dropdownOptions, token, saving, setSaving, reload, s
       setMessage("Dropdown option saved.");
       await reloadDropdownOptions();
     } catch (error) {
+      if (isSessionError(error)) {
+        onAuthExpired();
+        return;
+      }
       setMessage(error instanceof Error ? error.message : "Could not save dropdown option.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveDropdownOption() {
+    if (!editingDropdown) return;
+    setSaving(true);
+    setMessage("");
+    try {
+      await apiPatchAuth<DropdownOption>(`/admin/dropdown-options/${editingDropdown.id}`, {
+        value: editingDropdown.value,
+        label: editingDropdown.label,
+      }, token);
+      setEditingDropdown(null);
+      setMessage("Dropdown option updated.");
+      await reloadDropdownOptions();
+    } catch (error) {
+      if (isSessionError(error)) {
+        onAuthExpired();
+        return;
+      }
+      setMessage(error instanceof Error ? error.message : "Could not update dropdown option.");
     } finally {
       setSaving(false);
     }
@@ -1447,6 +1576,12 @@ function AdminView({ users, dropdownOptions, token, saving, setSaving, reload, s
       await apiDeleteAuth(`/admin/dropdown-options/${optionId}`, token);
       setMessage("Dropdown option deleted.");
       await reloadDropdownOptions();
+    } catch (error) {
+      if (isSessionError(error)) {
+        onAuthExpired();
+        return;
+      }
+      setMessage(error instanceof Error ? error.message : "Could not delete dropdown option.");
     } finally {
       setSaving(false);
     }
@@ -1473,6 +1608,7 @@ function AdminView({ users, dropdownOptions, token, saving, setSaving, reload, s
         </form>
       </Panel>
       <Panel title="Dropdown Options">
+        {message && <p className="muted">{message}</p>}
         <form className="section" onSubmit={submitDropdownOption}>
           <div className="form-grid">
             <label>Dropdown<select name="dropdown_key" defaultValue="meal_type">{Object.entries(dropdownLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
@@ -1488,15 +1624,32 @@ function AdminView({ users, dropdownOptions, token, saving, setSaving, reload, s
                 <strong>{group.label}</strong>
                 <span>{group.options.length} items</span>
               </summary>
+              <form className="section dropdown-add-form" onSubmit={(event) => submitDropdownOption(event, group.key)}>
+                <div className="form-grid">
+                  <label>Value<input name="value" required placeholder={`Add ${group.label.toLowerCase()}`} /></label>
+                  <label>Label<input name="label" placeholder={`Add ${group.label.toLowerCase()}`} /></label>
+                </div>
+                <button className="button mini" disabled={saving}>Add {group.label}</button>
+              </form>
               <div className="table-wrap section">
                 <table>
                   <thead><tr><th>Value</th><th>Label</th><th>Action</th></tr></thead>
                   <tbody>
                     {group.options.map((item) => (
                       <tr key={item.id}>
-                        <td>{item.value}</td>
-                        <td>{item.label}</td>
-                        <td className="table-action"><button className="button mini secondary" type="button" disabled={saving} onClick={() => deleteDropdownOption(item.id)}>Delete</button></td>
+                        {editingDropdown?.id === item.id ? (
+                          <>
+                            <td><input className="table-input" value={editingDropdown.value} onChange={(event) => setEditingDropdown({ ...editingDropdown, value: event.currentTarget.value })} /></td>
+                            <td><input className="table-input" value={editingDropdown.label} onChange={(event) => setEditingDropdown({ ...editingDropdown, label: event.currentTarget.value })} /></td>
+                            <td className="table-action"><button className="button mini" type="button" disabled={saving || !editingDropdown.value.trim()} onClick={saveDropdownOption}>Save</button><button className="button mini secondary" type="button" disabled={saving} onClick={() => setEditingDropdown(null)}>Cancel</button></td>
+                          </>
+                        ) : (
+                          <>
+                            <td>{item.value}</td>
+                            <td>{item.label}</td>
+                            <td className="table-action"><button className="button mini secondary" type="button" disabled={saving} onClick={() => setEditingDropdown({ id: item.id, value: item.value, label: item.label })}>Edit</button><button className="button mini secondary" type="button" disabled={saving} onClick={() => deleteDropdownOption(item.id)}>Delete</button></td>
+                          </>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -1718,6 +1871,15 @@ function ExpenseTable({ rows }: { rows: ExpenseLog[] }) {
     row.expense_category,
     row.expense_mode,
     `Rs ${row.cost}`,
+    row.notes ?? "-",
+  ])} />;
+}
+
+function MedTable({ rows }: { rows: MedLog[] }) {
+  return <Table headers={["Date", "Time", "Meds", "Notes"]} rows={rows.map((row) => [
+    row.med_date,
+    timeValue(row.med_time) ?? "-",
+    row.med_name,
     row.notes ?? "-",
   ])} />;
 }

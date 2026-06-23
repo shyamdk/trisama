@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from .database import Base, SessionLocal, engine, get_db
 from .food_ai import apply_food_enrichment, enrich_food_log, food_analysis_for_form
-from .models import AuthSession, Challenge, DailyCheckIn, DailyChecklistItem, DropdownOption, ExpenseLog, FinanceSnapshot, FoodLog, HabitLog, HealthMetric, Reminder, UserProfile
+from .models import AuthSession, Challenge, DailyCheckIn, DailyChecklistItem, DropdownOption, ExpenseLog, FinanceSnapshot, FoodLog, HabitLog, HealthMetric, MedLog, Reminder, UserProfile
 from .schemas import (
     AdminPasswordResetRequest,
     AdminUserCreate,
@@ -27,6 +27,7 @@ from .schemas import (
     DashboardOut,
     DropdownOptionCreate,
     DropdownOptionOut,
+    DropdownOptionUpdate,
     ExpenseLogCreate,
     ExpenseLogOut,
     FinanceSnapshotCreate,
@@ -43,6 +44,8 @@ from .schemas import (
     HealthMetricOut,
     LoginRequest,
     LoginResponse,
+    MedLogCreate,
+    MedLogOut,
     ReminderCreate,
     ReminderOut,
     ReportOut,
@@ -58,11 +61,11 @@ DEFAULT_USER_ID = 1
 DEFAULT_ADMIN_EMAIL = os.getenv("PLOS_DEFAULT_ADMIN_EMAIL")
 DEFAULT_ADMIN_PASSWORD = os.getenv("PLOS_DEFAULT_ADMIN_PASSWORD")
 SESSION_DAYS = 7
-DEFAULT_ENABLED_MODULE_KEYS = ["health", "food", "exercise", "sleep", "career", "bad_habits", "reminders", "journal", "expense_tracker"]
-NEW_MODULE_KEYS = {"journal", "expense_tracker"}
+DEFAULT_ENABLED_MODULE_KEYS = ["health", "food", "exercise", "sleep", "career", "bad_habits", "reminders", "journal", "expense_tracker", "meds"]
+NEW_MODULE_KEYS = {"journal", "expense_tracker", "meds"}
 REMOVED_MODULE_KEYS = {"social", "finance"}
 DEFAULT_ENABLED_MODULES = json.dumps(DEFAULT_ENABLED_MODULE_KEYS)
-UserOwnedModel = TypeVar("UserOwnedModel", DailyCheckIn, DailyChecklistItem, HealthMetric, HabitLog, FoodLog, FinanceSnapshot, ExpenseLog, Reminder, Challenge)
+UserOwnedModel = TypeVar("UserOwnedModel", DailyCheckIn, DailyChecklistItem, HealthMetric, HabitLog, FoodLog, FinanceSnapshot, ExpenseLog, MedLog, Reminder, Challenge)
 DEFAULT_DAILY_CHECKLIST = [
     ("body_metrics", "Weight / body metrics"),
     ("bp", "BP check-in"),
@@ -129,6 +132,7 @@ DEFAULT_DROPDOWN_OPTIONS = {
     ],
     "expense_category": ["need", "want", "give"],
     "expense_mode": ["UPI", "Credit Card", "Debit Card", "Cash", "Net Banking", "Wallet", "Auto Debit", "Cheque"],
+    "med_name": ["Tazloc CT 40"],
     "reminder_category": ["health", "food", "exercise", "sleep", "insurance", "career"],
     "reminder_channel": ["app", "telegram"],
 }
@@ -298,6 +302,8 @@ def ensure_user_columns(db: Session) -> None:
 
     db.connection().exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_expense_logs_user_id ON expense_logs (user_id)")
     db.connection().exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_expense_logs_expense_date ON expense_logs (expense_date)")
+    db.connection().exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_med_logs_user_id ON med_logs (user_id)")
+    db.connection().exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_med_logs_med_date ON med_logs (med_date)")
 
 
 def ensure_dropdown_options(db: Session) -> None:
@@ -632,6 +638,38 @@ def admin_create_dropdown_option(
     return item
 
 
+@app.patch("/admin/dropdown-options/{option_id}", response_model=DropdownOptionOut)
+def admin_update_dropdown_option(
+    option_id: int,
+    payload: DropdownOptionUpdate,
+    _admin: UserProfile = Depends(current_admin),
+    db: Session = Depends(get_db),
+) -> DropdownOption:
+    item = db.query(DropdownOption).filter(DropdownOption.id == option_id).first()
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dropdown option not found")
+    if payload.value is not None:
+        value = payload.value.strip()
+        if not value:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dropdown option value is required")
+        duplicate = (
+            db.query(DropdownOption)
+            .filter(DropdownOption.dropdown_key == item.dropdown_key, DropdownOption.value == value, DropdownOption.id != option_id)
+            .first()
+        )
+        if duplicate:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dropdown option already exists")
+        item.value = value
+    if payload.label is not None:
+        label = payload.label.strip()
+        item.label = label or item.value
+    if payload.sort_order is not None:
+        item.sort_order = payload.sort_order
+    db.commit()
+    db.refresh(item)
+    return item
+
+
 @app.delete("/admin/dropdown-options/{option_id}", status_code=204)
 def admin_delete_dropdown_option(
     option_id: int,
@@ -880,6 +918,21 @@ def create_expense(payload: ExpenseLogCreate, user_id: int = Query(DEFAULT_USER_
 @app.get("/expenses", response_model=list[ExpenseLogOut])
 def list_expenses(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> list[ExpenseLog]:
     return user_query(db, ExpenseLog, user_id).order_by(desc(ExpenseLog.expense_date), desc(ExpenseLog.expense_time)).limit(200).all()
+
+
+@app.post("/meds", response_model=MedLogOut)
+def create_med(payload: MedLogCreate, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> MedLog:
+    get_user(db, user_id)
+    item = MedLog(**with_user(payload.model_dump(), user_id))
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.get("/meds", response_model=list[MedLogOut])
+def list_meds(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> list[MedLog]:
+    return user_query(db, MedLog, user_id).order_by(desc(MedLog.med_date), desc(MedLog.med_time)).limit(200).all()
 
 
 @app.post("/reminders", response_model=ReminderOut)

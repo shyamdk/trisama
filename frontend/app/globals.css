@@ -464,6 +464,8 @@ th {
 }
 
 .table-action {
+  display: flex;
+  gap: 8px;
   min-width: 76px;
   white-space: nowrap;
   width: 1%;
@@ -471,6 +473,15 @@ th {
 
 .table-action .button {
   min-width: 68px;
+}
+
+.dropdown-add-form .form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+}
+
+.table-input {
+  min-height: 38px;
+  padding: 7px 9px;
 }
 
 @media (max-width: 980px) {
@@ -624,6 +635,7 @@ th {
   }
 
   .table-action {
+    display: grid;
     white-space: normal;
   }
 
