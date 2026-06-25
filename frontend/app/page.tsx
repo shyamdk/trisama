@@ -31,6 +31,8 @@ const baseTabs = ["Dashboard", "Profile", "Journal", "Health", "Meds", "Food", "
 const legacyFastingTimerStorageKey = "plos_fasting_countdown";
 const legacyFastingTimerClearedKey = "plos_fasting_countdown_cleared_at";
 const expiredFastingPromptMs = 12 * 60 * 60 * 1000;
+const dailyStepsName = "Daily Steps";
+const dailyStepsTarget = 10000;
 const moduleOptions = [
   { key: "health", label: "Health" },
   { key: "meds", label: "Meds" },
@@ -65,7 +67,7 @@ const defaultDropdownOptions: Record<string, string[]> = {
   fasting_plan: ["16:8", "18:6", "Full day", "Custom"],
   sugar_context: ["Fasting", "PP", "Random"],
   meal_type: ["Breakfast", "Lunch", "Dinner", "Snack", "Fasting"],
-  physical_exercise_name: ["Yoga", "Walking", "Cycling", "Strength Training"],
+  physical_exercise_name: ["Yoga", "Walking", "Cycling", "Strength Training", dailyStepsName],
   mind_exercise_name: ["Meditation", "Pranayama"],
   spirit_exercise_name: ["Vishnu Sahasranamam"],
   sleep_name: ["Sleep Duration", "Sleep Quality", "Bed Time Consistency"],
@@ -351,6 +353,10 @@ function dropdownValues(options: DropdownOption[], key: string) {
 function optionsWithCurrent(options: string[], current?: string | null) {
   if (!current || options.includes(current)) return options;
   return [current, ...options];
+}
+
+function optionsWithRequired(options: string[], required: string) {
+  return options.includes(required) ? options : [...options, required];
 }
 
 function dropdownGrouped(options: DropdownOption[]) {
@@ -649,14 +655,17 @@ export default function Home() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const completedValue = text(form, "completed");
+    const category = categoryOverride ?? text(form, "category");
+    const name = text(form, "name");
+    const isDailySteps = category === "exercise" && name === dailyStepsName;
     await save("/habits", {
       entry_date: text(form, "entry_date"),
       habit_time: text(form, "habit_time"),
-      category: categoryOverride ?? text(form, "category"),
-      name: text(form, "name"),
+      category,
+      name,
       value: numeric(form, "value"),
-      unit: text(form, "unit"),
-      target: numeric(form, "target"),
+      unit: isDailySteps ? "steps" : text(form, "unit"),
+      target: numeric(form, "target") ?? (isDailySteps ? dailyStepsTarget : null),
       completed: completedValue === "on" || completedValue === "true",
       notes: text(form, "notes"),
     }, event.currentTarget, habitId);
@@ -927,7 +936,7 @@ export default function Home() {
         ))}
       </nav>
 
-      {active === "Dashboard" && dashboard && <DashboardView dashboard={dashboard} checklist={dailyChecklist} toggleChecklistItem={toggleDailyChecklistItem} />}
+      {active === "Dashboard" && dashboard && <DashboardView dashboard={dashboard} report={report} checklist={dailyChecklist} toggleChecklistItem={toggleDailyChecklistItem} />}
       {active === "Profile" && user && <ProfileView user={user} dropdownOptions={dropdownOptions} saving={saving} submitProfile={submitProfile} submitChangePassword={submitChangePassword} />}
       {active === "Journal" && <JournalView checkins={checkins} saving={saving} submitJournal={submitJournal} deleteJournal={deleteJournal} />}
       {active === "Health" && <HealthView health={health} dropdownOptions={dropdownOptions} saving={saving} submitHealthMetric={submitHealthMetric} deleteHealthMetric={deleteHealthMetric} />}
@@ -1070,16 +1079,11 @@ function ProfileView({ user, dropdownOptions, saving, submitProfile, submitChang
   );
 }
 
-function DashboardView({ dashboard, checklist, toggleChecklistItem }: { dashboard: Dashboard; checklist: DailyChecklistItem[]; toggleChecklistItem: (item: DailyChecklistItem, completed: boolean) => void }) {
+function DashboardView({ dashboard, report, checklist, toggleChecklistItem }: { dashboard: Dashboard; report: Report | null; checklist: DailyChecklistItem[]; toggleChecklistItem: (item: DailyChecklistItem, completed: boolean) => void }) {
   const completedItems = checklist.filter((item) => item.completed).length;
   return (
     <div className="stack">
-      <section className="grid metrics">
-        <Metric title="Life Score" value={String(dashboard.life_score)} note="0-1000 capped" />
-        <Metric title="Accountability" value={String(dashboard.accountability_score)} note="Logging discipline" />
-        <Metric title="Weight" value={`${dashboard.current_weight_kg ?? "-"} kg`} note="Latest logged" />
-        <Metric title="BP" value={dashboard.latest_bp ?? "-"} note="Doctor supervision for medication" />
-      </section>
+      <AIAssessment dashboard={dashboard} report={report} />
       <Panel title="Today Logging Checklist">
         <div className="section">
           <div className="score-row"><span>{isoDate()}</span><strong>{completedItems}/{checklist.length} done</strong></div>
@@ -1093,18 +1097,25 @@ function DashboardView({ dashboard, checklist, toggleChecklistItem }: { dashboar
           </div>
         </div>
       </Panel>
-      <Panel title="Category Scores">
-        <div className="score-list">{visibleCategoryScores(dashboard.category_scores).map(([key, value]) => <div className="score-row" key={key}><span>{key.replace("_", " ")}</span><strong>{value}</strong></div>)}</div>
-      </Panel>
-      <Panel title="AI Coach Brief">
-        <div className="grid two section">
-          <CoachList title="Wins" rows={dashboard.coach.wins} />
-          <CoachList title="Risks" rows={dashboard.coach.risks} />
-          <CoachList title="Missing Logs" rows={dashboard.coach.missing_logs} />
-          <CoachList title="Next Actions" rows={dashboard.coach.next_actions} />
-        </div>
-      </Panel>
     </div>
+  );
+}
+
+function AIAssessment({ dashboard, report }: { dashboard: Dashboard; report: Report | null }) {
+  const days = recentAssessmentDays(report);
+  const assessment = buildAIAssessment(dashboard, days);
+
+  return (
+    <section className="ai-assessment">
+      <div className="assessment-copy">
+        <div className="eyebrow">AI Assessment</div>
+        <h2>{assessment.headline}</h2>
+        <p>{assessment.body}</p>
+        <div className="assessment-meta">
+          {assessment.meta.map((item) => <span key={item}>{item}</span>)}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -1462,6 +1473,7 @@ function GlobalFastingTimer({ countdown, mode, now, flipMode, clearCountdown }: 
   const timerName = countdown.timerType === "fasting" ? "fasting timer" : "meal timer";
   const overtimeLabel = overtimeMs > 0 ? `+${formatDurationWords(overtimeMs)}` : null;
   const startTime = new Date(countdown.startAt).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true });
+  const insight = fastingTimerInsight(countdown, elapsedMs);
 
   return (
     <div className="global-timer">
@@ -1472,6 +1484,7 @@ function GlobalFastingTimer({ countdown, mode, now, flipMode, clearCountdown }: 
           {overtimeLabel && <span className="timer-overtime"> {overtimeLabel}</span>}
         </h2>
         <div className="timer-meta">{formatTimerEndTime(countdown.targetAt, now)} · Started from {countdown.mealType?.toLowerCase() ?? "meal"} at {startTime}</div>
+        <div className="timer-insight"><strong>{insight.title}</strong><span>{insight.body}</span></div>
       </div>
       <div className="actions">
         <button className="button secondary" type="button" onClick={flipMode}>{mode === "remaining" ? "Show fasted" : "Show remaining"}</button>
@@ -1599,7 +1612,7 @@ function ExerciseView({ rows, dropdownOptions, saving, submitHabit, deleteHabit 
       <Panel title="Physical">
         <ExerciseEntryForm
           category="exercise"
-          options={dropdownValues(dropdownOptions, "physical_exercise_name")}
+          options={optionsWithRequired(dropdownValues(dropdownOptions, "physical_exercise_name"), dailyStepsName)}
           saving={saving}
           submitHabit={submitHabit}
         />
@@ -1643,15 +1656,26 @@ function ExerciseView({ rows, dropdownOptions, saving, submitHabit, deleteHabit 
 }
 
 function ExerciseEntryForm({ category, options, saving, submitHabit }: { category: string; options: string[]; saving: boolean; submitHabit: (event: FormEvent<HTMLFormElement>, category?: string) => Promise<void> }) {
+  const defaultName = options[0] ?? "";
+  const [selectedName, setSelectedName] = useState(defaultName);
+  const isDailySteps = category === "exercise" && selectedName === dailyStepsName;
+
+  useEffect(() => {
+    if (!options.includes(selectedName)) {
+      setSelectedName(defaultName);
+    }
+  }, [defaultName, options, selectedName]);
+
   return (
-    <form className="section" onSubmit={(event) => submitHabit(event, category)}>
-      <input name="unit" type="hidden" value="mins" />
+    <form className="section" onSubmit={(event) => submitHabit(event, category)} onReset={() => setSelectedName(defaultName)}>
+      <input name="unit" type="hidden" value={isDailySteps ? "steps" : "mins"} />
+      <input name="target" type="hidden" value={isDailySteps ? dailyStepsTarget : ""} />
       <input name="completed" type="hidden" value="true" />
       <div className="form-grid">
-        <label>Item<select name="name" required>{options.map((item) => <option key={item}>{item}</option>)}</select></label>
-        <label>Entry date<input name="entry_date" type="date" defaultValue={isoDate()} min={isoDate(-2)} max={isoDate()} required /></label>
-        <label>Time<input name="habit_time" type="time" defaultValue={currentTime()} required /></label>
-        <label>Mins<input name="value" type="number" min="1" step="1" required /></label>
+        <label>Item<select name="name" value={selectedName} onChange={(event) => setSelectedName(event.currentTarget.value)} required>{options.map((item) => <option key={item}>{item}</option>)}</select></label>
+        <label>Entry date<input key={`date-${selectedName}`} name="entry_date" type="date" defaultValue={isDailySteps ? isoDate(-1) : isoDate()} min={isoDate(-2)} max={isoDate()} required /></label>
+        <label>Time<input key={`time-${selectedName}`} name="habit_time" type="time" defaultValue={isDailySteps ? "" : currentTime()} required={!isDailySteps} /></label>
+        <label>{isDailySteps ? "Steps" : "Mins"}<input key={`value-${selectedName}`} name="value" type="number" min="1" step="1" required /></label>
       </div>
       <label>Notes<textarea name="notes" /></label>
       <button className="button" disabled={saving}>Save</button>
@@ -2103,6 +2127,119 @@ function listOrDash(items: string[]) {
 
 function visibleCategoryScores(scores: Record<string, number>) {
   return Object.entries(scores).filter(([key]) => key !== "finance" && key !== "social");
+}
+
+function recentAssessmentDays(report: Report | null) {
+  return [...(report?.daily_reports ?? [])]
+    .filter((day) =>
+      day.weight_kg !== null ||
+      day.bp !== null ||
+      day.sugar !== null ||
+      day.food_count > 0 ||
+      day.habits_total > 0 ||
+      day.med_items.length > 0 ||
+      day.notes.length > 0
+    )
+    .sort((left, right) => right.entry_date.localeCompare(left.entry_date))
+    .slice(0, 3);
+}
+
+function formatInteger(value: number) {
+  return new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(value);
+}
+
+function scoreName(value: string) {
+  return value.replace("_", " ");
+}
+
+function dailyStepsFromHabitItems(items: string[]) {
+  const row = items.find((item) => item.toLowerCase().includes("daily steps"));
+  const match = row?.match(/Daily Steps:\s*([\d,.]+)/i);
+  if (!match) return null;
+  const value = Number(match[1].replace(/[,.]/g, ""));
+  return Number.isFinite(value) ? value : null;
+}
+
+function buildAIAssessment(dashboard: Dashboard, days: Report["daily_reports"]) {
+  const scores = visibleCategoryScores(dashboard.category_scores).sort((left, right) => right[1] - left[1]);
+  const strongest = scores[0];
+  const focus = scores[scores.length - 1];
+  const stepValues = days.map((day) => dailyStepsFromHabitItems(day.habit_items ?? [])).filter((value): value is number => value !== null);
+  const stepHits = stepValues.filter((value) => value >= dailyStepsTarget).length;
+  const loggedDays = days.length;
+  const nextAction = dashboard.coach.next_actions[0] ?? "Log one clean meal, one movement entry, and one health metric today.";
+
+  let headline = "You are building measurable momentum.";
+  if (stepValues.length >= 2 && stepHits === stepValues.length) {
+    headline = `Strong movement streak: ${stepHits} recent days above ${formatInteger(dailyStepsTarget)} steps.`;
+  } else if (strongest && strongest[1] >= 70) {
+    headline = `${scoreName(strongest[0])} is leading your progress this week.`;
+  } else if (!loggedDays) {
+    headline = "Start with one honest log today.";
+  }
+
+  const body = loggedDays
+    ? `The last ${loggedDays} logged day${loggedDays === 1 ? "" : "s"} show useful progress, not guesswork. Keep the rhythm: ${nextAction}`
+    : `Your dashboard is ready. Enter today's food, movement, and health data; the assessment will become specific after a few logs.`;
+  const meta = [
+    `Life ${dashboard.life_score}/1000`,
+    `Accountability ${dashboard.accountability_score}/100`,
+    strongest ? `Best: ${scoreName(strongest[0])} ${strongest[1]}/100` : "Best: add logs",
+    focus ? `Focus: ${scoreName(focus[0])}` : "Focus: today",
+  ];
+
+  return { headline, body, meta };
+}
+
+function fastingHourLabel(hours: number) {
+  if (hours < 1) return "<1h";
+  return `${Math.floor(hours)}h`;
+}
+
+function fastingTimerInsight(countdown: FastingCountdown, elapsedMs: number) {
+  const hours = Math.max(0, elapsedMs / (60 * 60 * 1000));
+  const hourLabel = fastingHourLabel(hours);
+
+  if (countdown.timerType !== "fasting") {
+    return {
+      title: `${hourLabel} meal gap: keep it clean.`,
+      body: "Digestion gets room to settle. Water and a short walk keep the next meal calmer.",
+    };
+  }
+  if (hours < 2) {
+    return {
+      title: `${hourLabel} fasted: good start.`,
+      body: "Your body is still handling the last meal. Keep water steady and let the clock work.",
+    };
+  }
+  if (hours < 4) {
+    return {
+      title: `${hourLabel} fasted: settling in.`,
+      body: "Insulin starts easing down. Light movement can help cravings pass without drama.",
+    };
+  }
+  if (hours < 8) {
+    return {
+      title: `${hourLabel} fasted: steady zone.`,
+      body: "Stored glucose is supporting energy. Hunger usually comes in waves and then fades.",
+    };
+  }
+  if (hours < 12) {
+    return {
+      title: `${hourLabel} fasted: strong control.`,
+      body: "Your body is leaning more on stored fuel. Stay hydrated and keep the finish simple.",
+    };
+  }
+  if (hours < 16) {
+    return {
+      title: `${hourLabel} fasted: deep window.`,
+      body: "Low insulin supports fat use, and cellular cleanup signals may rise. Stay calm and steady.",
+    };
+  }
+  return {
+    title: `${hourLabel} fasted: target reached.`,
+    body: "You did the hard part. Break the fast gently with protein, fibre, and water.",
+  };
 }
 
 function ReportView({ report, userId, setReport }: { report: Report; userId: number; setReport: (report: Report) => void }) {

@@ -83,7 +83,7 @@ DEFAULT_DROPDOWN_OPTIONS = {
     "fasting_plan": ["16:8", "18:6", "Full day", "Custom"],
     "sugar_context": ["Fasting", "PP", "Random"],
     "meal_type": ["Breakfast", "Lunch", "Dinner", "Snack", "Fasting"],
-    "physical_exercise_name": ["Yoga", "Walking", "Cycling", "Strength Training"],
+    "physical_exercise_name": ["Yoga", "Walking", "Cycling", "Strength Training", "Daily Steps"],
     "mind_exercise_name": ["Meditation", "Pranayama"],
     "spirit_exercise_name": ["Vishnu Sahasranamam"],
     "sleep_name": ["Sleep Duration", "Sleep Quality", "Bed Time Consistency"],
