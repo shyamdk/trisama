@@ -141,6 +141,7 @@ const dropdownLabels: Record<string, string> = {
 type FastingCountdown = {
   userId: number;
   plan: string;
+  timerType: "fasting" | "meal";
   mealType?: string | null;
   startAt: number;
   targetAt: number;
@@ -229,6 +230,27 @@ function timerDurationHoursForMeal(mealType: string | null | undefined, plan?: s
   return mealGapHours(plan);
 }
 
+function timerTypeForLatestMeal(latest: FoodLog, foods: FoodLog[]): FastingCountdown["timerType"] {
+  if (latest.meal_type === "Dinner") return "fasting";
+  const latestAt = localTimestamp(latest.entry_date, latest.meal_time);
+  const latestDinner = foods
+    .filter((row) => row.meal_type === "Dinner")
+    .reduce<FoodLog | null>((current, row) => {
+      const rowAt = localTimestamp(row.entry_date, row.meal_time);
+      if (rowAt > latestAt) return current;
+      if (!current) return row;
+      return rowAt > localTimestamp(current.entry_date, current.meal_time) ? row : current;
+    }, null);
+  if (!latestDinner) return "meal";
+  const latestDinnerAt = localTimestamp(latestDinner.entry_date, latestDinner.meal_time);
+  return latest.entry_date === latestDinner.entry_date && latestAt > latestDinnerAt ? "fasting" : "meal";
+}
+
+function timerDurationHoursForLatestMeal(latest: FoodLog, foods: FoodLog[], plan?: string | null) {
+  if (latest.meal_type === "Drink") return null;
+  return timerTypeForLatestMeal(latest, foods) === "fasting" ? fastingHours(plan) : timerDurationHoursForMeal(latest.meal_type, plan);
+}
+
 function requiresPostMealWalk(mealType: string | null | undefined) {
   return mealType === "Breakfast" || mealType === "Lunch" || mealType === "Dinner";
 }
@@ -249,7 +271,7 @@ function localTimestamp(entryDate: string | null, entryTime: string | null) {
   return Number.isNaN(parsed.getTime()) ? Date.now() : parsed.getTime();
 }
 
-function fastingCountdownFromLatestMeal(foods: FoodLog[], plan: string, clearedAt: number, userId: number) {
+function fastingCountdownFromLatestMeal(foods: FoodLog[], plan: string, clearedAt: number, userId: number): FastingCountdown | null {
   const now = Date.now();
   const mealRows = foods.filter((row) => {
     if (!row.meal_type || row.meal_type === "Fasting") return false;
@@ -262,11 +284,12 @@ function fastingCountdownFromLatestMeal(foods: FoodLog[], plan: string, clearedA
     return rowTime > currentTimeValue ? row : current;
   });
   const startAt = localTimestamp(latest.entry_date, latest.meal_time);
-  const durationHours = timerDurationHoursForMeal(latest.meal_type, plan);
+  const timerType = timerTypeForLatestMeal(latest, mealRows);
+  const durationHours = timerDurationHoursForLatestMeal(latest, mealRows, plan);
   if (!durationHours) return null;
   const targetAt = startAt + durationHours * 60 * 60 * 1000;
   if (startAt <= clearedAt || targetAt <= Date.now() - expiredFastingPromptMs) return null;
-  return { userId, plan, mealType: latest.meal_type, startAt, targetAt };
+  return { userId, plan, timerType, mealType: latest.meal_type, startAt, targetAt };
 }
 
 function enabledModules(user: UserProfile | null) {
@@ -287,6 +310,11 @@ function dropdownValues(options: DropdownOption[], key: string) {
   return configured.length ? Array.from(new Set(configured)) : (defaultDropdownOptions[key] ?? []);
 }
 
+function optionsWithCurrent(options: string[], current?: string | null) {
+  if (!current || options.includes(current)) return options;
+  return [current, ...options];
+}
+
 function dropdownGrouped(options: DropdownOption[]) {
   return Object.keys(dropdownLabels).map((key) => ({
     key,
@@ -300,6 +328,11 @@ function dropdownGrouped(options: DropdownOption[]) {
 function isSessionError(error: unknown) {
   if (!(error instanceof Error)) return false;
   return ["Invalid or expired session", "Missing session token", "Session user not found"].some((message) => error.message.includes(message));
+}
+
+function sameFastingCountdown(left: FastingCountdown | null, right: FastingCountdown | null) {
+  if (!left || !right) return left === right;
+  return left.userId === right.userId && left.startAt === right.startAt && left.targetAt === right.targetAt && left.timerType === right.timerType;
 }
 
 export default function Home() {
@@ -324,6 +357,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [fastingCountdown, setFastingCountdown] = useState<FastingCountdown | null>(null);
+  const [restorableFastingCountdown, setRestorableFastingCountdown] = useState<FastingCountdown | null>(null);
   const [fastingTimerMode, setFastingTimerMode] = useState<"remaining" | "elapsed">("remaining");
   const [now, setNow] = useState(Date.now());
 
@@ -353,6 +387,7 @@ export default function Home() {
     setReport(null);
     setAdminUsers([]);
     setFastingCountdown(null);
+    setRestorableFastingCountdown(null);
     setFastingTimerMode("remaining");
   }
 
@@ -431,24 +466,19 @@ export default function Home() {
     if (!user) return;
     if (!foods.length) {
       setFastingCountdown(null);
+      setRestorableFastingCountdown(null);
       return;
     }
+    const restorable = fastingCountdownFromLatestMeal(foods, user.fasting_plan ?? "16:8", 0, user.id);
+    setRestorableFastingCountdown((current) => (sameFastingCountdown(current, restorable) ? current : restorable));
     const clearedAt = Number(window.localStorage.getItem(fastingTimerClearedKey(user.id)) ?? 0);
     const derived = fastingCountdownFromLatestMeal(foods, user.fasting_plan ?? "16:8", clearedAt, user.id);
     if (!derived) {
       setFastingCountdown(null);
       return;
     }
-    if (
-      fastingCountdown &&
-      fastingCountdown.userId === derived.userId &&
-      fastingCountdown.startAt === derived.startAt &&
-      fastingCountdown.targetAt === derived.targetAt
-    ) {
-      return;
-    }
-    setFastingCountdown(derived);
-  }, [foods, user?.id, user?.fasting_plan, fastingCountdown]);
+    setFastingCountdown((current) => (sameFastingCountdown(current, derived) ? current : derived));
+  }, [foods, user?.id, user?.fasting_plan]);
 
   function startFastingCountdown(entryDate: string | null, entryTime: string | null, mealType: string | null) {
     if (!user) return;
@@ -456,19 +486,25 @@ export default function Home() {
     const durationHours = timerDurationHoursForMeal(mealType, plan);
     if (!durationHours) return;
     const startAt = localTimestamp(entryDate, entryTime);
-    const nextCountdown = {
+    const timerType: FastingCountdown["timerType"] = mealType === "Dinner" ? "fasting" : "meal";
+    const nextCountdown: FastingCountdown = {
       userId: user.id,
       plan,
+      timerType,
       mealType,
       startAt,
       targetAt: startAt + durationHours * 60 * 60 * 1000,
     };
     setFastingCountdown(nextCountdown);
+    setRestorableFastingCountdown(nextCountdown);
     setFastingTimerMode("remaining");
     window.localStorage.removeItem(fastingTimerClearedKey(user.id));
   }
 
   function clearFastingCountdown() {
+    if (fastingCountdown) {
+      setRestorableFastingCountdown(fastingCountdown);
+    }
     setFastingCountdown(null);
     if (user) {
       window.localStorage.setItem(fastingTimerClearedKey(user.id), String(Date.now()));
@@ -476,10 +512,22 @@ export default function Home() {
     removeLegacyFastingTimerStorage();
   }
 
-  async function save(path: string, payload: unknown, form: HTMLFormElement) {
+  function restoreFastingCountdown() {
+    if (!user || !restorableFastingCountdown) return;
+    setFastingCountdown(restorableFastingCountdown);
+    setFastingTimerMode("remaining");
+    window.localStorage.removeItem(fastingTimerClearedKey(user.id));
+  }
+
+  async function save(path: string, payload: unknown, form: HTMLFormElement, itemId?: number) {
     setSaving(true);
     try {
-      await apiPost(userPath(path, user?.id ?? 1), payload);
+      const requestPath = itemId ? `${path}/${itemId}` : path;
+      if (itemId) {
+        await apiPatch(userPath(requestPath, user?.id ?? 1), payload);
+      } else {
+        await apiPost(userPath(requestPath, user?.id ?? 1), payload);
+      }
       form.reset();
       await loadAll();
     } finally {
@@ -487,7 +535,19 @@ export default function Home() {
     }
   }
 
-  async function submitJournal(event: FormEvent<HTMLFormElement>) {
+  async function deleteEntry(path: string, itemId: number, confirmMessage: string) {
+    if (!window.confirm(confirmMessage)) return false;
+    setSaving(true);
+    try {
+      await apiDelete(userPath(`${path}/${itemId}`, user?.id ?? 1));
+      await loadAll();
+      return true;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function submitJournal(event: FormEvent<HTMLFormElement>, checkinId?: number) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     await save("/checkins", {
@@ -500,10 +560,14 @@ export default function Home() {
       gratitude: text(form, "gratitude"),
       journal_notes: text(form, "journal_notes"),
       notes: text(form, "notes"),
-    }, event.currentTarget);
+    }, event.currentTarget, checkinId);
   }
 
-  async function submitHealthMetric(event: FormEvent<HTMLFormElement>) {
+  async function deleteJournal(checkinId: number) {
+    return deleteEntry("/checkins", checkinId, "Delete this journal entry?");
+  }
+
+  async function submitHealthMetric(event: FormEvent<HTMLFormElement>, metricId?: number) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     await save("/health-metrics", {
@@ -521,10 +585,14 @@ export default function Home() {
       bmr: numeric(form, "bmr"),
       shite_count: numeric(form, "shite_count"),
       notes: text(form, "notes"),
-    }, event.currentTarget);
+    }, event.currentTarget, metricId);
   }
 
-  async function submitMed(event: FormEvent<HTMLFormElement>) {
+  async function deleteHealthMetric(metricId: number) {
+    return deleteEntry("/health-metrics", metricId, "Delete this health log?");
+  }
+
+  async function submitMed(event: FormEvent<HTMLFormElement>, medId?: number) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     await save("/meds", {
@@ -532,10 +600,14 @@ export default function Home() {
       med_time: text(form, "med_time"),
       med_name: text(form, "med_name"),
       notes: text(form, "notes"),
-    }, event.currentTarget);
+    }, event.currentTarget, medId);
   }
 
-  async function submitHabit(event: FormEvent<HTMLFormElement>, categoryOverride?: string) {
+  async function deleteMed(medId: number) {
+    return deleteEntry("/meds", medId, "Delete this meds log?");
+  }
+
+  async function submitHabit(event: FormEvent<HTMLFormElement>, categoryOverride?: string, habitId?: number) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const completedValue = text(form, "completed");
@@ -549,10 +621,14 @@ export default function Home() {
       target: numeric(form, "target"),
       completed: completedValue === "on" || completedValue === "true",
       notes: text(form, "notes"),
-    }, event.currentTarget);
+    }, event.currentTarget, habitId);
   }
 
-  async function submitExpense(event: FormEvent<HTMLFormElement>) {
+  async function deleteHabit(habitId: number) {
+    return deleteEntry("/habits", habitId, "Delete this log?");
+  }
+
+  async function submitExpense(event: FormEvent<HTMLFormElement>, expenseId?: number) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     await save("/expenses", {
@@ -564,7 +640,11 @@ export default function Home() {
       expense_mode: text(form, "expense_mode"),
       cost: numeric(form, "cost") ?? 0,
       notes: text(form, "notes"),
-    }, event.currentTarget);
+    }, event.currentTarget, expenseId);
+  }
+
+  async function deleteExpense(expenseId: number) {
+    return deleteEntry("/expenses", expenseId, "Delete this expense?");
   }
 
   async function submitFood(event: FormEvent<HTMLFormElement>, foodId?: number) {
@@ -613,17 +693,18 @@ export default function Home() {
   }
 
   async function deleteFood(foodId: number) {
-    if (!window.confirm("Delete this food log?")) return;
+    if (!window.confirm("Delete this food log?")) return false;
     setSaving(true);
     try {
       await apiDelete(userPath(`/foods/${foodId}`, user?.id ?? 1));
       await loadAll();
+      return true;
     } finally {
       setSaving(false);
     }
   }
 
-  async function submitReminder(event: FormEvent<HTMLFormElement>) {
+  async function submitReminder(event: FormEvent<HTMLFormElement>, reminderId?: number) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     await save("/reminders", {
@@ -634,7 +715,11 @@ export default function Home() {
       channel: text(form, "channel") ?? "app",
       completed: form.get("completed") === "on",
       notes: text(form, "notes"),
-    }, event.currentTarget);
+    }, event.currentTarget, reminderId);
+  }
+
+  async function deleteReminder(reminderId: number) {
+    return deleteEntry("/reminders", reminderId, "Delete this reminder?");
   }
 
   async function submitProfile(event: FormEvent<HTMLFormElement>) {
@@ -792,6 +877,10 @@ export default function Home() {
         />
       )}
 
+      {!fastingCountdown && restorableFastingCountdown && (
+        <FastingTimerRestore countdown={restorableFastingCountdown} now={now} restoreCountdown={restoreFastingCountdown} />
+      )}
+
       <nav className="tabs">
         {tabs.map((tab) => (
           <button className={`tab ${active === tab ? "active" : ""}`} key={tab} onClick={() => setActive(tab)}>
@@ -802,16 +891,16 @@ export default function Home() {
 
       {active === "Dashboard" && dashboard && <DashboardView dashboard={dashboard} checklist={dailyChecklist} toggleChecklistItem={toggleDailyChecklistItem} />}
       {active === "Profile" && user && <ProfileView user={user} dropdownOptions={dropdownOptions} saving={saving} submitProfile={submitProfile} submitChangePassword={submitChangePassword} />}
-      {active === "Journal" && <JournalView checkins={checkins} saving={saving} submitJournal={submitJournal} />}
-      {active === "Health" && <HealthView health={health} dropdownOptions={dropdownOptions} saving={saving} submitHealthMetric={submitHealthMetric} />}
-      {active === "Meds" && <MedsView meds={meds} dropdownOptions={dropdownOptions} saving={saving} submitMed={submitMed} />}
+      {active === "Journal" && <JournalView checkins={checkins} saving={saving} submitJournal={submitJournal} deleteJournal={deleteJournal} />}
+      {active === "Health" && <HealthView health={health} dropdownOptions={dropdownOptions} saving={saving} submitHealthMetric={submitHealthMetric} deleteHealthMetric={deleteHealthMetric} />}
+      {active === "Meds" && <MedsView meds={meds} dropdownOptions={dropdownOptions} saving={saving} submitMed={submitMed} deleteMed={deleteMed} />}
       {active === "Food" && <FoodView foods={foods} dropdownOptions={dropdownOptions} fastingPlan={user.fasting_plan ?? "16:8"} calorieTarget={user.daily_calorie_target ?? 1800} saving={saving} submitFood={submitFood} deleteFood={deleteFood} />}
-      {active === "Exercise" && <ExerciseView rows={[...(habitsByCategory.exercise ?? []), ...(habitsByCategory.mind ?? [])]} dropdownOptions={dropdownOptions} saving={saving} submitHabit={submitHabit} />}
-      {active === "Sleep" && <HabitView title="Sleep" category="sleep" rows={habitsByCategory.sleep ?? []} saving={saving} submitHabit={submitHabit} presets={dropdownValues(dropdownOptions, "sleep_name")} />}
-      {active === "Career" && <HabitView title="Career & Growth" category="career" rows={[...(habitsByCategory.career ?? []), ...(habitsByCategory.growth ?? [])]} saving={saving} submitHabit={submitHabit} presets={dropdownValues(dropdownOptions, "career_name")} />}
-      {active === "Bad Habits" && <HabitView title="Bad Habits" category="bad_habit" rows={habitsByCategory.bad_habit ?? []} saving={saving} submitHabit={submitHabit} presets={dropdownValues(dropdownOptions, "bad_habit_name")} />}
-      {active === "Expense Tracker" && <ExpenseTrackerView expenses={expenses} dropdownOptions={dropdownOptions} saving={saving} submitExpense={submitExpense} />}
-      {active === "Reminders" && <ReminderView reminders={reminders} dropdownOptions={dropdownOptions} saving={saving} submitReminder={submitReminder} />}
+      {active === "Exercise" && <ExerciseView rows={[...(habitsByCategory.exercise ?? []), ...(habitsByCategory.mind ?? [])]} dropdownOptions={dropdownOptions} saving={saving} submitHabit={submitHabit} deleteHabit={deleteHabit} />}
+      {active === "Sleep" && <HabitView title="Sleep" category="sleep" rows={habitsByCategory.sleep ?? []} saving={saving} submitHabit={submitHabit} deleteHabit={deleteHabit} presets={dropdownValues(dropdownOptions, "sleep_name")} />}
+      {active === "Career" && <HabitView title="Career & Growth" category="career" rows={[...(habitsByCategory.career ?? []), ...(habitsByCategory.growth ?? [])]} saving={saving} submitHabit={submitHabit} deleteHabit={deleteHabit} presets={dropdownValues(dropdownOptions, "career_name")} />}
+      {active === "Bad Habits" && <HabitView title="Bad Habits" category="bad_habit" rows={habitsByCategory.bad_habit ?? []} saving={saving} submitHabit={submitHabit} deleteHabit={deleteHabit} presets={dropdownValues(dropdownOptions, "bad_habit_name")} />}
+      {active === "Expense Tracker" && <ExpenseTrackerView expenses={expenses} dropdownOptions={dropdownOptions} saving={saving} submitExpense={submitExpense} deleteExpense={deleteExpense} />}
+      {active === "Reminders" && <ReminderView reminders={reminders} dropdownOptions={dropdownOptions} saving={saving} submitReminder={submitReminder} deleteReminder={deleteReminder} />}
       {active === "Reports" && report && <ReportView report={report} userId={user.id} setReport={setReport} />}
       {active === "Admin" && user.role === "admin" && token && <AdminView users={adminUsers} dropdownOptions={dropdownOptions} token={token} saving={saving} setSaving={setSaving} reload={() => loadAll()} setDropdownOptions={setDropdownOptions} onAuthExpired={expireSession} />}
     </main>
@@ -981,32 +1070,63 @@ function DashboardView({ dashboard, checklist, toggleChecklistItem }: { dashboar
   );
 }
 
-function JournalView({ checkins, saving, submitJournal }: { checkins: DailyCheckIn[]; saving: boolean; submitJournal: (event: FormEvent<HTMLFormElement>) => void }) {
+function JournalView({ checkins, saving, submitJournal, deleteJournal }: { checkins: DailyCheckIn[]; saving: boolean; submitJournal: (event: FormEvent<HTMLFormElement>, checkinId?: number) => Promise<void>; deleteJournal: (checkinId: number) => Promise<boolean> }) {
+  const [editingCheckin, setEditingCheckin] = useState<DailyCheckIn | null>(null);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    await submitJournal(event, editingCheckin?.id);
+    setEditingCheckin(null);
+  }
+
+  async function handleDelete(row: DailyCheckIn) {
+    const deleted = await deleteJournal(row.id);
+    if (deleted && editingCheckin?.id === row.id) {
+      setEditingCheckin(null);
+    }
+  }
+
   return (
     <div className="grid two">
-      <Panel title="Journal Entry">
-        <form className="section" onSubmit={submitJournal}>
+      <Panel title={editingCheckin ? "Edit Journal Entry" : "Journal Entry"}>
+        <form className="section" key={editingCheckin?.id ?? "new-journal"} onSubmit={handleSubmit}>
           <div className="form-grid">
-            <label>Entry date<input name="entry_date" type="date" defaultValue={isoDate()} min={isoDate(-2)} max={isoDate()} required /></label>
-            <label>How I feel<input name="feeling" maxLength={120} /></label>
-            <label>Mood<input name="mood" type="number" min="1" max="10" /></label>
-            <label>Energy<input name="energy" type="number" min="1" max="10" /></label>
-            <label>Stress<input name="stress" type="number" min="1" max="10" /></label>
-            <label>Day rating<input name="day_rating" type="number" min="1" max="10" /></label>
+            <label>Entry date<input name="entry_date" type="date" defaultValue={editingCheckin?.entry_date ?? isoDate()} min={editingCheckin ? undefined : isoDate(-2)} max={isoDate()} required /></label>
+            <label>How I feel<input name="feeling" maxLength={120} defaultValue={editingCheckin?.feeling ?? ""} /></label>
+            <label>Mood<input name="mood" type="number" min="1" max="10" defaultValue={editingCheckin?.mood ?? ""} /></label>
+            <label>Energy<input name="energy" type="number" min="1" max="10" defaultValue={editingCheckin?.energy ?? ""} /></label>
+            <label>Stress<input name="stress" type="number" min="1" max="10" defaultValue={editingCheckin?.stress ?? ""} /></label>
+            <label>Day rating<input name="day_rating" type="number" min="1" max="10" defaultValue={editingCheckin?.day_rating ?? ""} /></label>
           </div>
-          <label>Gratitude<textarea name="gratitude" /></label>
-          <label>Journal notes<textarea className="journal-textarea" name="journal_notes" /></label>
-          <label>Notes<textarea name="notes" /></label>
-          <button className="button" disabled={saving}>Save Journal</button>
+          <label>Gratitude<textarea name="gratitude" defaultValue={editingCheckin?.gratitude ?? ""} /></label>
+          <label>Journal notes<textarea className="journal-textarea" name="journal_notes" defaultValue={editingCheckin?.journal_notes ?? ""} /></label>
+          <label>Notes<textarea name="notes" defaultValue={editingCheckin?.notes ?? ""} /></label>
+          <div className="actions">
+            <button className="button" disabled={saving}>{editingCheckin ? "Update Journal" : "Save Journal"}</button>
+            {editingCheckin && <button className="button secondary" type="button" disabled={saving} onClick={() => setEditingCheckin(null)}>Cancel Edit</button>}
+          </div>
         </form>
       </Panel>
-      <Panel title="Recent Journal Entries"><JournalTable rows={checkins} /></Panel>
+      <Panel title="Recent Journal Entries"><JournalTable rows={checkins} editRow={setEditingCheckin} deleteRow={handleDelete} /></Panel>
     </div>
   );
 }
 
-function HealthView({ health, dropdownOptions, saving, submitHealthMetric }: { health: HealthMetric[]; dropdownOptions: DropdownOption[]; saving: boolean; submitHealthMetric: (event: FormEvent<HTMLFormElement>) => void }) {
-  const sugarContextOptions = dropdownValues(dropdownOptions, "sugar_context");
+function HealthView({ health, dropdownOptions, saving, submitHealthMetric, deleteHealthMetric }: { health: HealthMetric[]; dropdownOptions: DropdownOption[]; saving: boolean; submitHealthMetric: (event: FormEvent<HTMLFormElement>, metricId?: number) => Promise<void>; deleteHealthMetric: (metricId: number) => Promise<boolean> }) {
+  const [editingHealth, setEditingHealth] = useState<HealthMetric | null>(null);
+  const sugarContextOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "sugar_context"), editingHealth?.sugar_context);
+
+  async function handleEditSubmit(event: FormEvent<HTMLFormElement>) {
+    await submitHealthMetric(event, editingHealth?.id);
+    setEditingHealth(null);
+  }
+
+  async function handleDelete(row: HealthMetric) {
+    const deleted = await deleteHealthMetric(row.id);
+    if (deleted && editingHealth?.id === row.id) {
+      setEditingHealth(null);
+    }
+  }
+
   return (
     <div className="grid two">
       <Panel title="BP Check-in">
@@ -1059,38 +1179,81 @@ function HealthView({ health, dropdownOptions, saving, submitHealthMetric }: { h
           <button className="button" disabled={saving}>Save Shite</button>
         </form>
       </Panel>
-      <Panel title="Recent Health Logs"><HealthTable rows={health} /></Panel>
+      {editingHealth && (
+        <Panel title="Edit Health Log">
+          <form className="section" key={editingHealth.id} onSubmit={handleEditSubmit}>
+            <div className="form-grid">
+              <label>Entry date<input name="entry_date" type="date" defaultValue={editingHealth.entry_date} max={isoDate()} required /></label>
+              <label>Time<input name="measurement_time" type="time" defaultValue={timeValue(editingHealth.measurement_time) ?? ""} /></label>
+              <label>Weight kg<input name="weight_kg" type="number" step="0.1" defaultValue={editingHealth.weight_kg ?? ""} /></label>
+              <label>Systolic BP<input name="systolic_bp" type="number" defaultValue={editingHealth.systolic_bp ?? ""} /></label>
+              <label>Diastolic BP<input name="diastolic_bp" type="number" defaultValue={editingHealth.diastolic_bp ?? ""} /></label>
+              <label>Type<select name="sugar_context" defaultValue={editingHealth.sugar_context ?? ""}><option value="">-</option>{sugarContextOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+              <label>Blood sugar<input name="blood_sugar" type="number" step="0.1" defaultValue={editingHealth.blood_sugar ?? ""} /></label>
+              <label>Body fat %<input name="body_fat_percent" type="number" step="0.1" defaultValue={editingHealth.body_fat_percent ?? ""} /></label>
+              <label>Muscle %<input name="muscle_percent" type="number" step="0.1" defaultValue={editingHealth.muscle_percent ?? ""} /></label>
+              <label>Visceral fat<input name="visceral_fat" type="number" step="0.1" defaultValue={editingHealth.visceral_fat ?? ""} /></label>
+              <label>Body age<input name="body_age" type="number" step="0.1" defaultValue={editingHealth.body_age ?? ""} /></label>
+              <label>BMR/RMR<input name="bmr" type="number" step="0.1" defaultValue={editingHealth.bmr ?? ""} /></label>
+              <label>Shite count<input name="shite_count" type="number" min="0" step="1" defaultValue={editingHealth.shite_count ?? ""} /></label>
+            </div>
+            <label>Notes<textarea name="notes" defaultValue={editingHealth.notes ?? ""} /></label>
+            <div className="actions">
+              <button className="button" disabled={saving}>Update Health</button>
+              <button className="button secondary" type="button" disabled={saving} onClick={() => setEditingHealth(null)}>Cancel Edit</button>
+            </div>
+          </form>
+        </Panel>
+      )}
+      <Panel title="Recent Health Logs"><HealthTable rows={health} editRow={setEditingHealth} deleteRow={handleDelete} /></Panel>
     </div>
   );
 }
 
-function MedsView({ meds, dropdownOptions, saving, submitMed }: { meds: MedLog[]; dropdownOptions: DropdownOption[]; saving: boolean; submitMed: (event: FormEvent<HTMLFormElement>) => void }) {
-  const medOptions = dropdownValues(dropdownOptions, "med_name");
+function MedsView({ meds, dropdownOptions, saving, submitMed, deleteMed }: { meds: MedLog[]; dropdownOptions: DropdownOption[]; saving: boolean; submitMed: (event: FormEvent<HTMLFormElement>, medId?: number) => Promise<void>; deleteMed: (medId: number) => Promise<boolean> }) {
+  const [editingMed, setEditingMed] = useState<MedLog | null>(null);
+  const medOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "med_name"), editingMed?.med_name);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    await submitMed(event, editingMed?.id);
+    setEditingMed(null);
+  }
+
+  async function handleDelete(row: MedLog) {
+    const deleted = await deleteMed(row.id);
+    if (deleted && editingMed?.id === row.id) {
+      setEditingMed(null);
+    }
+  }
+
   return (
     <div className="grid two">
-      <Panel title="Meds Entry">
-        <form className="section" onSubmit={submitMed}>
+      <Panel title={editingMed ? "Edit Meds Entry" : "Meds Entry"}>
+        <form className="section" key={editingMed?.id ?? "new-med"} onSubmit={handleSubmit}>
           <div className="form-grid">
-            <label>Date<input name="med_date" type="date" defaultValue={isoDate()} min={isoDate(-2)} max={isoDate()} required /></label>
-            <label>Time<input name="med_time" type="time" defaultValue={currentTime()} required /></label>
-            <label>Meds<select name="med_name" required>{medOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label>Date<input name="med_date" type="date" defaultValue={editingMed?.med_date ?? isoDate()} min={editingMed ? undefined : isoDate(-2)} max={isoDate()} required /></label>
+            <label>Time<input name="med_time" type="time" defaultValue={timeValue(editingMed?.med_time) ?? currentTime()} required /></label>
+            <label>Meds<select name="med_name" defaultValue={editingMed?.med_name ?? medOptions[0]} required>{medOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
           </div>
-          <label>Notes<textarea name="notes" /></label>
-          <button className="button" disabled={saving}>Save Meds</button>
+          <label>Notes<textarea name="notes" defaultValue={editingMed?.notes ?? ""} /></label>
+          <div className="actions">
+            <button className="button" disabled={saving}>{editingMed ? "Update Meds" : "Save Meds"}</button>
+            {editingMed && <button className="button secondary" type="button" disabled={saving} onClick={() => setEditingMed(null)}>Cancel Edit</button>}
+          </div>
         </form>
       </Panel>
-      <Panel title="Recent Meds"><MedTable rows={meds} /></Panel>
+      <Panel title="Recent Meds"><MedTable rows={meds} editRow={setEditingMed} deleteRow={handleDelete} /></Panel>
     </div>
   );
 }
 
-function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, submitFood, deleteFood }: { foods: FoodLog[]; dropdownOptions: DropdownOption[]; fastingPlan: string; calorieTarget: number; saving: boolean; submitFood: (event: FormEvent<HTMLFormElement>, foodId?: number) => Promise<void>; deleteFood: (foodId: number) => Promise<void> }) {
+function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, submitFood, deleteFood }: { foods: FoodLog[]; dropdownOptions: DropdownOption[]; fastingPlan: string; calorieTarget: number; saving: boolean; submitFood: (event: FormEvent<HTMLFormElement>, foodId?: number) => Promise<void>; deleteFood: (foodId: number) => Promise<boolean> }) {
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState("");
   const [editingFood, setEditingFood] = useState<FoodLog | null>(null);
   const [selectedMealType, setSelectedMealType] = useState(editingFood?.meal_type ?? "Breakfast");
   const [postMealWalkMeters, setPostMealWalkMeters] = useState(editingFood?.post_meal_walk_meters === null || editingFood?.post_meal_walk_meters === undefined ? "" : String(editingFood.post_meal_walk_meters));
-  const mealTypeOptions = dropdownValues(dropdownOptions, "meal_type");
+  const mealTypeOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "meal_type"), editingFood?.meal_type);
   const calorieRows = useMemo(() => dailyCalorieRows(foods, calorieTarget), [foods, calorieTarget]);
   const fastingRows = useMemo(() => dailyFastingRows(foods), [foods]);
   const walkRequired = requiresPostMealWalk(selectedMealType);
@@ -1156,8 +1319,8 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
   }
 
   async function handleDeleteFood(row: FoodLog) {
-    await deleteFood(row.id);
-    if (editingFood?.id === row.id) {
+    const deleted = await deleteFood(row.id);
+    if (deleted && editingFood?.id === row.id) {
       setEditingFood(null);
     }
   }
@@ -1167,7 +1330,7 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
       <Panel title="Food & Nutrition Log">
         <form className="section" key={editingFood?.id ?? "new-food"} onSubmit={handleFoodSubmit}>
           <div className="form-grid">
-            <label>Entry date<input name="entry_date" type="date" defaultValue={editingFood?.entry_date ?? isoDate()} min={isoDate(-2)} max={isoDate()} required /></label>
+            <label>Entry date<input name="entry_date" type="date" defaultValue={editingFood?.entry_date ?? isoDate()} min={editingFood ? undefined : isoDate(-2)} max={isoDate()} required /></label>
             <label>Meal time<input name="meal_time" type="time" defaultValue={timeValue(editingFood?.meal_time) ?? currentTime()} /></label>
             <label>Meal type<select name="meal_type" value={selectedMealType} onChange={(event) => setSelectedMealType(event.currentTarget.value)} required>{mealTypeOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
             <label className="wide-field">Food items<textarea className="compact-textarea" name="food_item" defaultValue={editingFood?.food_item ?? ""} placeholder="boiled egg (3), veges (100 gms)" /></label>
@@ -1210,22 +1373,41 @@ function GlobalFastingTimer({ countdown, mode, now, flipMode, clearCountdown }: 
   const valueMs = mode === "remaining" ? remainingMs : elapsedMs;
   const label = mode === "remaining" ? "remaining fast time" : "fasted so far";
   const isComplete = remainingMs <= 0;
-  const timerName = countdown.mealType === "Dinner" ? "fasting timer" : "meal timer";
+  const timerName = countdown.timerType === "fasting" ? "fasting timer" : "meal timer";
   const overtimeLabel = overtimeMs > 0 ? `+${formatDurationWords(overtimeMs)}` : null;
+  const startTime = new Date(countdown.startAt).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true });
 
   return (
     <div className="global-timer">
       <div>
         <div className="eyebrow">{countdown.plan} {timerName}</div>
         <h2>
-          {isComplete && mode === "remaining" ? "Fast complete" : `${formatDuration(valueMs)} ${label}`}
+          {isComplete && mode === "remaining" ? `${countdown.timerType === "fasting" ? "Fast" : "Timer"} complete` : `${formatDuration(valueMs)} ${label}`}
           {overtimeLabel && <span className="timer-overtime"> {overtimeLabel}</span>}
         </h2>
-        <div className="timer-meta">{formatTimerEndTime(countdown.targetAt, now)}</div>
+        <div className="timer-meta">{formatTimerEndTime(countdown.targetAt, now)} · Started from {countdown.mealType?.toLowerCase() ?? "meal"} at {startTime}</div>
       </div>
       <div className="actions">
         <button className="button secondary" type="button" onClick={flipMode}>{mode === "remaining" ? "Show fasted" : "Show remaining"}</button>
         <button className="button secondary" type="button" onClick={clearCountdown}>Clear</button>
+      </div>
+    </div>
+  );
+}
+
+function FastingTimerRestore({ countdown, now, restoreCountdown }: { countdown: FastingCountdown; now: number; restoreCountdown: () => void }) {
+  const remainingMs = Math.max(0, countdown.targetAt - now);
+  const timerName = countdown.timerType === "fasting" ? "fasting timer" : "meal timer";
+
+  return (
+    <div className="global-timer restore-timer">
+      <div>
+        <div className="eyebrow">Hidden {countdown.plan} {timerName}</div>
+        <h2>{remainingMs > 0 ? `${formatDuration(remainingMs)} remaining` : "Timer complete"}</h2>
+        <div className="timer-meta">{formatTimerEndTime(countdown.targetAt, now)}</div>
+      </div>
+      <div className="actions">
+        <button className="button secondary" type="button" onClick={restoreCountdown}>Bring Back</button>
       </div>
     </div>
   );
@@ -1311,7 +1493,21 @@ function formatDuration(ms: number) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-function ExerciseView({ rows, dropdownOptions, saving, submitHabit }: { rows: HabitLog[]; dropdownOptions: DropdownOption[]; saving: boolean; submitHabit: (event: FormEvent<HTMLFormElement>, category?: string) => void }) {
+function ExerciseView({ rows, dropdownOptions, saving, submitHabit, deleteHabit }: { rows: HabitLog[]; dropdownOptions: DropdownOption[]; saving: boolean; submitHabit: (event: FormEvent<HTMLFormElement>, category?: string, habitId?: number) => Promise<void>; deleteHabit: (habitId: number) => Promise<boolean> }) {
+  const [editingHabit, setEditingHabit] = useState<HabitLog | null>(null);
+
+  async function handleEditSubmit(event: FormEvent<HTMLFormElement>) {
+    await submitHabit(event, editingHabit?.category, editingHabit?.id);
+    setEditingHabit(null);
+  }
+
+  async function handleDelete(row: HabitLog) {
+    const deleted = await deleteHabit(row.id);
+    if (deleted && editingHabit?.id === row.id) {
+      setEditingHabit(null);
+    }
+  }
+
   return (
     <div className="grid two">
       <Panel title="Physical">
@@ -1344,12 +1540,17 @@ function ExerciseView({ rows, dropdownOptions, saving, submitHabit }: { rows: Ha
           </div>
         </div>
       </Panel>
-      <Panel title="Recent Exercise Logs"><HabitTable rows={rows} /></Panel>
+      {editingHabit && (
+        <Panel title="Edit Exercise Log">
+          <HabitEditForm row={editingHabit} saving={saving} submit={handleEditSubmit} cancel={() => setEditingHabit(null)} />
+        </Panel>
+      )}
+      <Panel title="Recent Exercise Logs"><HabitTable rows={rows} editRow={setEditingHabit} deleteRow={handleDelete} /></Panel>
     </div>
   );
 }
 
-function ExerciseEntryForm({ category, options, saving, submitHabit }: { category: string; options: string[]; saving: boolean; submitHabit: (event: FormEvent<HTMLFormElement>, category?: string) => void }) {
+function ExerciseEntryForm({ category, options, saving, submitHabit }: { category: string; options: string[]; saving: boolean; submitHabit: (event: FormEvent<HTMLFormElement>, category?: string) => Promise<void> }) {
   return (
     <form className="section" onSubmit={(event) => submitHabit(event, category)}>
       <input name="unit" type="hidden" value="mins" />
@@ -1366,7 +1567,48 @@ function ExerciseEntryForm({ category, options, saving, submitHabit }: { categor
   );
 }
 
-function HabitView({ title, category, rows, saving, submitHabit, presets }: { title: string; category: string; rows: HabitLog[]; saving: boolean; submitHabit: (event: FormEvent<HTMLFormElement>, category?: string) => void; presets: string[] }) {
+function HabitEditForm({ row, saving, submit, cancel, presets = [] }: { row: HabitLog; saving: boolean; submit: (event: FormEvent<HTMLFormElement>) => Promise<void>; cancel: () => void; presets?: string[] }) {
+  const nameOptions = optionsWithCurrent(presets, row.name);
+  return (
+    <form className="section" key={row.id} onSubmit={submit}>
+      <input name="category" type="hidden" value={row.category} />
+      <div className="form-grid">
+        <label>Entry date<input name="entry_date" type="date" defaultValue={row.entry_date} max={isoDate()} required /></label>
+        <label>Time<input name="habit_time" type="time" defaultValue={timeValue(row.habit_time) ?? ""} /></label>
+        {nameOptions.length ? (
+          <label>Name<select name="name" defaultValue={row.name} required>{nameOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+        ) : (
+          <label>Name<input name="name" defaultValue={row.name} required /></label>
+        )}
+        <label>Value<input name="value" type="number" step="0.1" defaultValue={row.value ?? ""} /></label>
+        <label>Unit<input name="unit" defaultValue={row.unit ?? ""} /></label>
+        <label>Target<input name="target" type="number" step="0.1" defaultValue={row.target ?? ""} /></label>
+      </div>
+      <label className="checkbox-label"><input name="completed" type="checkbox" defaultChecked={row.completed} /> <span>Completed</span></label>
+      <label>Notes<textarea name="notes" defaultValue={row.notes ?? ""} /></label>
+      <div className="actions">
+        <button className="button" disabled={saving}>Update Log</button>
+        <button className="button secondary" type="button" disabled={saving} onClick={cancel}>Cancel Edit</button>
+      </div>
+    </form>
+  );
+}
+
+function HabitView({ title, category, rows, saving, submitHabit, deleteHabit, presets }: { title: string; category: string; rows: HabitLog[]; saving: boolean; submitHabit: (event: FormEvent<HTMLFormElement>, category?: string, habitId?: number) => Promise<void>; deleteHabit: (habitId: number) => Promise<boolean>; presets: string[] }) {
+  const [editingHabit, setEditingHabit] = useState<HabitLog | null>(null);
+
+  async function handleEditSubmit(event: FormEvent<HTMLFormElement>) {
+    await submitHabit(event, editingHabit?.category, editingHabit?.id);
+    setEditingHabit(null);
+  }
+
+  async function handleDelete(row: HabitLog) {
+    const deleted = await deleteHabit(row.id);
+    if (deleted && editingHabit?.id === row.id) {
+      setEditingHabit(null);
+    }
+  }
+
   return (
     <div className="grid two">
       <Panel title={`${title} Log`}>
@@ -1383,63 +1625,102 @@ function HabitView({ title, category, rows, saving, submitHabit, presets }: { ti
           <button className="button" disabled={saving}>Save {title}</button>
         </form>
       </Panel>
-      <Panel title={`Recent ${title} Logs`}><HabitTable rows={rows} /></Panel>
+      {editingHabit && (
+        <Panel title={`Edit ${title} Log`}>
+          <HabitEditForm row={editingHabit} saving={saving} submit={handleEditSubmit} cancel={() => setEditingHabit(null)} presets={presets} />
+        </Panel>
+      )}
+      <Panel title={`Recent ${title} Logs`}><HabitTable rows={rows} editRow={setEditingHabit} deleteRow={handleDelete} /></Panel>
     </div>
   );
 }
 
-function ExpenseTrackerView({ expenses, dropdownOptions, saving, submitExpense }: { expenses: ExpenseLog[]; dropdownOptions: DropdownOption[]; saving: boolean; submitExpense: (event: FormEvent<HTMLFormElement>) => void }) {
-  const expenseTypeOptions = dropdownValues(dropdownOptions, "expense_type");
-  const expenseCategoryOptions = dropdownValues(dropdownOptions, "expense_category");
-  const expenseModeOptions = dropdownValues(dropdownOptions, "expense_mode");
+function ExpenseTrackerView({ expenses, dropdownOptions, saving, submitExpense, deleteExpense }: { expenses: ExpenseLog[]; dropdownOptions: DropdownOption[]; saving: boolean; submitExpense: (event: FormEvent<HTMLFormElement>, expenseId?: number) => Promise<void>; deleteExpense: (expenseId: number) => Promise<boolean> }) {
+  const [editingExpense, setEditingExpense] = useState<ExpenseLog | null>(null);
+  const expenseTypeOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "expense_type"), editingExpense?.expense_type);
+  const expenseCategoryOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "expense_category"), editingExpense?.expense_category);
+  const expenseModeOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "expense_mode"), editingExpense?.expense_mode);
   const totalCost = expenses.reduce((sum, row) => sum + row.cost, 0);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    await submitExpense(event, editingExpense?.id);
+    setEditingExpense(null);
+  }
+
+  async function handleDelete(row: ExpenseLog) {
+    const deleted = await deleteExpense(row.id);
+    if (deleted && editingExpense?.id === row.id) {
+      setEditingExpense(null);
+    }
+  }
+
   return (
     <div className="stack">
       <section className="grid metrics">
         <Metric title="Recent Spend" value={`Rs ${Math.round(totalCost)}`} note={`${expenses.length} logged expenses`} />
       </section>
       <div className="grid two">
-        <Panel title="Expense Entry">
-          <form className="section" onSubmit={submitExpense}>
+        <Panel title={editingExpense ? "Edit Expense" : "Expense Entry"}>
+          <form className="section" key={editingExpense?.id ?? "new-expense"} onSubmit={handleSubmit}>
             <div className="form-grid">
-              <label>Expense<input name="expense" required /></label>
-              <label>Expense date<input name="expense_date" type="date" defaultValue={isoDate()} required /></label>
-              <label>Expense time<input name="expense_time" type="time" defaultValue={currentTime()} required /></label>
-              <label>Expense type<select name="expense_type" required>{expenseTypeOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
-              <label>Expense cat<select name="expense_category" defaultValue="need" required>{expenseCategoryOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
-              <label>Expense mode<select name="expense_mode" defaultValue="UPI" required>{expenseModeOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
-              <label>Cost Rs.<input name="cost" type="number" min="0" step="0.01" required /></label>
+              <label>Expense<input name="expense" defaultValue={editingExpense?.expense ?? ""} required /></label>
+              <label>Expense date<input name="expense_date" type="date" defaultValue={editingExpense?.expense_date ?? isoDate()} required /></label>
+              <label>Expense time<input name="expense_time" type="time" defaultValue={timeValue(editingExpense?.expense_time) ?? currentTime()} required /></label>
+              <label>Expense type<select name="expense_type" defaultValue={editingExpense?.expense_type ?? expenseTypeOptions[0]} required>{expenseTypeOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+              <label>Expense cat<select name="expense_category" defaultValue={editingExpense?.expense_category ?? "need"} required>{expenseCategoryOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+              <label>Expense mode<select name="expense_mode" defaultValue={editingExpense?.expense_mode ?? "UPI"} required>{expenseModeOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+              <label>Cost Rs.<input name="cost" type="number" min="0" step="0.01" defaultValue={editingExpense?.cost ?? ""} required /></label>
             </div>
-            <label>Notes<textarea name="notes" /></label>
-            <button className="button" disabled={saving}>Save Expense</button>
+            <label>Notes<textarea name="notes" defaultValue={editingExpense?.notes ?? ""} /></label>
+            <div className="actions">
+              <button className="button" disabled={saving}>{editingExpense ? "Update Expense" : "Save Expense"}</button>
+              {editingExpense && <button className="button secondary" type="button" disabled={saving} onClick={() => setEditingExpense(null)}>Cancel Edit</button>}
+            </div>
           </form>
         </Panel>
-        <Panel title="Recent Expenses"><ExpenseTable rows={expenses} /></Panel>
+        <Panel title="Recent Expenses"><ExpenseTable rows={expenses} editRow={setEditingExpense} deleteRow={handleDelete} /></Panel>
       </div>
     </div>
   );
 }
 
-function ReminderView({ reminders, dropdownOptions, saving, submitReminder }: { reminders: Reminder[]; dropdownOptions: DropdownOption[]; saving: boolean; submitReminder: (event: FormEvent<HTMLFormElement>) => void }) {
-  const categoryOptions = dropdownValues(dropdownOptions, "reminder_category");
-  const channelOptions = dropdownValues(dropdownOptions, "reminder_channel");
+function ReminderView({ reminders, dropdownOptions, saving, submitReminder, deleteReminder }: { reminders: Reminder[]; dropdownOptions: DropdownOption[]; saving: boolean; submitReminder: (event: FormEvent<HTMLFormElement>, reminderId?: number) => Promise<void>; deleteReminder: (reminderId: number) => Promise<boolean> }) {
+  const [editingReminder, setEditingReminder] = useState<Reminder | null>(null);
+  const categoryOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "reminder_category"), editingReminder?.category);
+  const channelOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "reminder_channel"), editingReminder?.channel);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    await submitReminder(event, editingReminder?.id);
+    setEditingReminder(null);
+  }
+
+  async function handleDelete(row: Reminder) {
+    const deleted = await deleteReminder(row.id);
+    if (deleted && editingReminder?.id === row.id) {
+      setEditingReminder(null);
+    }
+  }
+
   return (
     <div className="grid two">
-      <Panel title="Reminder Entry">
-        <form className="section" onSubmit={submitReminder}>
+      <Panel title={editingReminder ? "Edit Reminder" : "Reminder Entry"}>
+        <form className="section" key={editingReminder?.id ?? "new-reminder"} onSubmit={handleSubmit}>
           <div className="form-grid">
-            <label>Title<input name="title" required /></label>
-            <label>Category<select name="category" required>{categoryOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
-            <label>Due date<input name="due_date" type="date" /></label>
-            <label>Cadence<input name="cadence" placeholder="daily, weekly, monthly" /></label>
-            <label>Channel<select name="channel">{channelOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label>Title<input name="title" defaultValue={editingReminder?.title ?? ""} required /></label>
+            <label>Category<select name="category" defaultValue={editingReminder?.category ?? categoryOptions[0]} required>{categoryOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label>Due date<input name="due_date" type="date" defaultValue={editingReminder?.due_date ?? ""} /></label>
+            <label>Cadence<input name="cadence" defaultValue={editingReminder?.cadence ?? ""} placeholder="daily, weekly, monthly" /></label>
+            <label>Channel<select name="channel" defaultValue={editingReminder?.channel ?? "app"}>{channelOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
           </div>
-          <label className="checkbox-label"><input name="completed" type="checkbox" /> <span>Completed</span></label>
-          <label>Notes<textarea name="notes" /></label>
-          <button className="button" disabled={saving}>Save Reminder</button>
+          <label className="checkbox-label"><input name="completed" type="checkbox" defaultChecked={editingReminder?.completed ?? false} /> <span>Completed</span></label>
+          <label>Notes<textarea name="notes" defaultValue={editingReminder?.notes ?? ""} /></label>
+          <div className="actions">
+            <button className="button" disabled={saving}>{editingReminder ? "Update Reminder" : "Save Reminder"}</button>
+            {editingReminder && <button className="button secondary" type="button" disabled={saving} onClick={() => setEditingReminder(null)}>Cancel Edit</button>}
+          </div>
         </form>
       </Panel>
-      <Panel title="Reminder List"><ReminderTable rows={reminders} /></Panel>
+      <Panel title="Reminder List"><ReminderTable rows={reminders} editRow={setEditingReminder} deleteRow={handleDelete} /></Panel>
     </div>
   );
 }
@@ -1715,6 +1996,8 @@ function visibleCategoryScores(scores: Record<string, number>) {
 }
 
 function ReportView({ report, userId, setReport }: { report: Report; userId: number; setReport: (report: Report) => void }) {
+  const [editingChallenge, setEditingChallenge] = useState<Report["challenges"][number] | null>(null);
+
   async function load(period: string) {
     setReport(await apiGet<Report>(userPath(`/reports/${period}`, userId)));
   }
@@ -1728,25 +2011,40 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
     event.preventDefault();
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
-    await apiPost(userPath("/challenges", userId), {
+    const payload = {
       title: text(form, "title") ?? "21 Day Challenge",
       start_date: text(form, "start_date"),
       end_date: text(form, "end_date"),
       target_weight_kg: numeric(form, "target_weight_kg"),
       notes: text(form, "notes"),
-    });
+    };
+    if (editingChallenge) {
+      await apiPatch(userPath(`/challenges/${editingChallenge.id}`, userId), payload);
+    } else {
+      await apiPost(userPath("/challenges", userId), payload);
+    }
     formElement.reset();
+    setEditingChallenge(null);
     setReport(await apiGet<Report>(userPath(`/reports/${report.period}`, userId)));
   }
   async function deleteChallenge(challengeId: number) {
     if (!window.confirm("Delete this challenge?")) return;
     await apiDelete(userPath(`/challenges/${challengeId}`, userId));
+    if (editingChallenge?.id === challengeId) {
+      setEditingChallenge(null);
+    }
     setReport(await apiGet<Report>(userPath(`/reports/${report.period}`, userId)));
   }
   return (
     <div className="stack">
       <div className="actions"><button className="button secondary" onClick={() => load("daily")}>Daily</button><button className="button secondary" onClick={() => load("weekly")}>Weekly</button><button className="button secondary" onClick={() => load("monthly")}>Monthly</button><button className="button secondary" onClick={() => load("quarterly")}>Quarterly</button></div>
       <section className="grid metrics"><Metric title="Period" value={report.period} note="Generated report" /><Metric title="Life Score" value={String(report.life_score)} note="0-1000" /><Metric title="Accountability" value={String(report.accountability_score)} note="Logging" /></section>
+      <Panel title="Entry Change Graph">
+        <ReportTrendChart days={report.daily_reports ?? []} />
+      </Panel>
+      <Panel title="All Entry List">
+        <ReportEntryList days={report.daily_reports ?? []} />
+      </Panel>
       <Panel title="Consolidated Daily Report">
         <div className="stack section">
           {report.daily_reports?.length ? report.daily_reports.map((day) => (
@@ -1758,6 +2056,8 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
                 <span>Sugar: {day.sugar ?? "-"}{day.sugar_context ? ` (${day.sugar_context})` : ""}</span>
                 <span>Food: {day.food_count} / {day.total_calories ?? "-"} cal</span>
                 <span>Habits: {day.habits_done}/{day.habits_total}</span>
+                <span>Meds: {day.med_items?.length ?? 0}</span>
+                <span>Expenses: {day.total_expenses === null || day.total_expenses === undefined ? "-" : `Rs ${Math.round(day.total_expenses)}`}</span>
               </summary>
               <Table
                 headers={["Parameter", "Value"]}
@@ -1770,6 +2070,8 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
                   ["Food", listOrDash(day.food_items)],
                   ["Food quality", `Avg score: ${day.avg_quality_score ?? "-"} | Flags: ${day.food_flags.length ? day.food_flags.join(", ") : "-"}`],
                   ["Habits", listOrDash(day.habit_items)],
+                  ["Meds", listOrDash(day.med_items ?? [])],
+                  ["Expenses", day.total_expenses === null || day.total_expenses === undefined ? listOrDash(day.expense_items ?? []) : <div><strong>Rs {Math.round(day.total_expenses)}</strong>{listOrDash(day.expense_items ?? [])}</div>],
                   ["Reminders", listOrDash(day.reminder_items)],
                   ["Notes", listOrDash(day.notes)],
                 ]}
@@ -1779,15 +2081,18 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
         </div>
       </Panel>
       <Panel title="21 Day Challenges">
-        <form className="section" onSubmit={submitChallenge}>
+        <form className="section" key={editingChallenge?.id ?? "new-challenge"} onSubmit={submitChallenge}>
           <div className="form-grid">
-            <label>Title<input name="title" defaultValue="21 Day Challenge" /></label>
-            <label>Target weight kg<input name="target_weight_kg" type="number" step="0.1" required /></label>
-            <label>Start date<input name="start_date" type="date" defaultValue={isoDate()} required /></label>
-            <label>End date<input name="end_date" type="date" defaultValue={isoDate(20)} required /></label>
+            <label>Title<input name="title" defaultValue={editingChallenge?.title ?? "21 Day Challenge"} /></label>
+            <label>Target weight kg<input name="target_weight_kg" type="number" step="0.1" defaultValue={editingChallenge?.target_weight_kg ?? ""} required /></label>
+            <label>Start date<input name="start_date" type="date" defaultValue={editingChallenge?.start_date ?? isoDate()} required /></label>
+            <label>End date<input name="end_date" type="date" defaultValue={editingChallenge?.end_date ?? isoDate(20)} required /></label>
           </div>
-          <label>Notes<textarea name="notes" /></label>
-          <button className="button">Create Challenge</button>
+          <label>Notes<textarea name="notes" defaultValue={editingChallenge?.notes ?? ""} /></label>
+          <div className="actions">
+            <button className="button">{editingChallenge ? "Update Challenge" : "Create Challenge"}</button>
+            {editingChallenge && <button className="button secondary" type="button" onClick={() => setEditingChallenge(null)}>Cancel Edit</button>}
+          </div>
         </form>
         <div className="stack section">
           {report.challenges.length ? report.challenges.map((challenge) => {
@@ -1800,6 +2105,7 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
                   <span>Target: {formatKg(challenge.target_weight_kg)}</span>
                   <span>Latest: {weightSummary.latest}</span>
                   <span>To go: {weightSummary.toGo}</span>
+                  <button className="button mini secondary" type="button" onClick={(event) => { event.preventDefault(); setEditingChallenge(challenge); }}>Edit</button>
                   <button className="button mini secondary" type="button" onClick={(event) => { event.preventDefault(); deleteChallenge(challenge.id); }}>Delete</button>
                 </summary>
                 {challenge.notes && <p className="muted">{challenge.notes}</p>}
@@ -1811,6 +2117,164 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
       </Panel>
       <section className="grid two"><Panel title="Trends"><CoachList title="" rows={report.trends} /></Panel><Panel title="Risks"><CoachList title="" rows={report.risks} /></Panel><Panel title="Recommendations"><CoachList title="" rows={report.recommendations} /></Panel><Panel title="Category Scores"><div className="score-list">{visibleCategoryScores(report.category_scores).map(([key, value]) => <div className="score-row" key={key}><span>{key.replace("_", " ")}</span><strong>{value}</strong></div>)}</div></Panel></section>
     </div>
+  );
+}
+
+function reportDaysAscending(days: Report["daily_reports"]) {
+  return [...days].sort((left, right) => left.entry_date.localeCompare(right.entry_date));
+}
+
+function dayEntryCount(day: Report["daily_reports"][number]) {
+  const healthCount = [
+    day.weight_kg,
+    day.bp,
+    day.sugar,
+    day.body_fat_percent,
+    day.muscle_percent,
+    day.visceral_fat,
+    day.body_age,
+    day.bmr,
+    day.shite_count,
+  ].filter((value) => value !== null && value !== undefined).length;
+  return healthCount + day.food_count + day.habits_total + (day.med_items?.length ?? 0) + (day.expense_items?.length ?? 0) + (day.reminder_items?.length ?? 0);
+}
+
+function formatTrendValue(value: number | null, unit: string) {
+  if (value === null || Number.isNaN(value)) return "-";
+  const rounded = Number.isInteger(value) ? value : Number(value.toFixed(1));
+  return unit === "Rs" ? `Rs ${rounded}` : `${rounded}${unit ? ` ${unit}` : ""}`;
+}
+
+function ReportTrendChart({ days }: { days: Report["daily_reports"] }) {
+  const sortedDays = reportDaysAscending(days).slice(-30);
+  const metrics = [
+    {
+      label: "Entries",
+      unit: "",
+      color: "#0f766e",
+      values: sortedDays.map((day) => dayEntryCount(day)),
+    },
+    {
+      label: "Weight",
+      unit: "kg",
+      color: "#2563eb",
+      values: sortedDays.map((day) => day.weight_kg),
+    },
+    {
+      label: "Sugar",
+      unit: "",
+      color: "#b45309",
+      values: sortedDays.map((day) => day.sugar),
+    },
+    {
+      label: "Calories",
+      unit: "cal",
+      color: "#7c3aed",
+      values: sortedDays.map((day) => day.total_calories),
+    },
+    {
+      label: "Expenses",
+      unit: "Rs",
+      color: "#b91c1c",
+      values: sortedDays.map((day) => day.total_expenses),
+    },
+  ].filter((metric) => metric.values.filter((value) => value !== null && value !== undefined).length >= 2);
+
+  if (!sortedDays.length) {
+    return <p className="muted section">No report entries yet.</p>;
+  }
+
+  if (!metrics.length) {
+    return <p className="muted section">Add at least two days of entries to see change graphs.</p>;
+  }
+
+  return (
+    <div className="trend-grid section">
+      {metrics.map((metric) => (
+        <TrendCard
+          key={metric.label}
+          label={metric.label}
+          unit={metric.unit}
+          color={metric.color}
+          dates={sortedDays.map((day) => day.entry_date)}
+          values={metric.values}
+        />
+      ))}
+    </div>
+  );
+}
+
+function TrendCard({ label, unit, color, dates, values }: { label: string; unit: string; color: string; dates: string[]; values: (number | null)[] }) {
+  const points = values
+    .map((value, index) => ({ value, index }))
+    .filter((point): point is { value: number; index: number } => point.value !== null && point.value !== undefined && !Number.isNaN(point.value));
+  const first = points[0];
+  const latest = points[points.length - 1];
+
+  return (
+    <div className="trend-card">
+      <div className="score-row">
+        <span>{label}</span>
+        <strong>{latest ? formatTrendValue(latest.value, unit) : "-"}</strong>
+      </div>
+      <Sparkline values={values} color={color} />
+      <div className="trend-foot">
+        <span>{first ? dates[first.index] : "-"}</span>
+        <span>{latest ? dates[latest.index] : "-"}</span>
+      </div>
+    </div>
+  );
+}
+
+function Sparkline({ values, color }: { values: (number | null)[]; color: string }) {
+  const width = 320;
+  const height = 118;
+  const padding = 16;
+  const points = values
+    .map((value, index) => ({ value, index }))
+    .filter((point): point is { value: number; index: number } => point.value !== null && point.value !== undefined && !Number.isNaN(point.value));
+  if (points.length < 2) {
+    return <div className="sparkline-empty">Not enough data</div>;
+  }
+  const min = Math.min(...points.map((point) => point.value));
+  const max = Math.max(...points.map((point) => point.value));
+  const range = max - min || 1;
+  const xDenominator = Math.max(1, values.length - 1);
+  const coordinates = points.map((point) => {
+    const x = padding + (point.index / xDenominator) * (width - padding * 2);
+    const y = height - padding - ((point.value - min) / range) * (height - padding * 2);
+    return { ...point, x, y };
+  });
+  const polylinePoints = coordinates.map((point) => `${point.x},${point.y}`).join(" ");
+  const latest = coordinates[coordinates.length - 1];
+
+  return (
+    <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Trend line">
+      <line x1={padding} y1={padding} x2={padding} y2={height - padding} className="sparkline-axis" />
+      <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} className="sparkline-axis" />
+      <polyline points={polylinePoints} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx={latest.x} cy={latest.y} r="4" fill={color} />
+    </svg>
+  );
+}
+
+function ReportEntryList({ days }: { days: Report["daily_reports"] }) {
+  return (
+    <Table
+      headers={["Date", "Entries", "Weight", "BP", "Sugar", "Food", "Habits", "Meds", "Expenses", "Reminders"]}
+      rows={days.map((day) => [
+        day.entry_date,
+        dayEntryCount(day),
+        day.weight_kg === null ? "-" : `${day.weight_kg} kg`,
+        day.bp ?? "-",
+        day.sugar === null ? "-" : `${day.sugar}${day.sugar_context ? ` ${day.sugar_context}` : ""}`,
+        `${day.food_count} items${day.total_calories === null ? "" : ` / ${Math.round(day.total_calories)} cal`}`,
+        `${day.habits_done}/${day.habits_total}`,
+        day.med_items?.length ? listOrDash(day.med_items) : "-",
+        day.total_expenses === null || day.total_expenses === undefined ? "-" : `Rs ${Math.round(day.total_expenses)}`,
+        day.reminder_items?.length ? listOrDash(day.reminder_items) : "-",
+      ])}
+    />
   );
 }
 
@@ -1826,8 +2290,10 @@ function CoachList({ title, rows }: { title: string; rows: string[] }) {
   return <div>{title && <h3>{title}</h3>}<ul className="coach-list">{rows.map((item) => <li key={item}>{item}</li>)}</ul></div>;
 }
 
-function JournalTable({ rows }: { rows: DailyCheckIn[] }) {
-  return <Table headers={["Date", "Feeling", "Scores", "Gratitude", "Journal Notes"]} rows={rows.map((row) => [
+function JournalTable({ rows, editRow, deleteRow }: { rows: DailyCheckIn[]; editRow: (row: DailyCheckIn) => void; deleteRow: (row: DailyCheckIn) => void }) {
+  return <Table headers={["Edit", "Delete", "Date", "Feeling", "Scores", "Gratitude", "Journal Notes"]} rows={rows.map((row) => [
+    <button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button>,
+    <button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button>,
     row.entry_date,
     row.feeling ?? "-",
     `Mood ${row.mood ?? "-"} | Energy ${row.energy ?? "-"} | Stress ${row.stress ?? "-"} | Day ${row.day_rating ?? "-"}`,
@@ -1836,12 +2302,34 @@ function JournalTable({ rows }: { rows: DailyCheckIn[] }) {
   ])} />;
 }
 
-function HealthTable({ rows }: { rows: HealthMetric[] }) {
-  return <Table headers={["Date", "Time", "Weight", "BP", "Sugar", "Type", "Body Fat", "Shite", "Notes"]} rows={rows.map((row) => [row.entry_date, row.measurement_time ?? "-", row.weight_kg ?? "-", row.systolic_bp && row.diastolic_bp ? `${row.systolic_bp}/${row.diastolic_bp}` : "-", row.blood_sugar ?? "-", row.sugar_context ?? "-", row.body_fat_percent ?? "-", row.shite_count ?? "-", row.notes ?? "-"])} />;
+function HealthTable({ rows, editRow, deleteRow }: { rows: HealthMetric[]; editRow: (row: HealthMetric) => void; deleteRow: (row: HealthMetric) => void }) {
+  return <Table headers={["Edit", "Delete", "Date", "Time", "Weight", "BP", "Sugar", "Type", "Body Fat", "Shite", "Notes"]} rows={rows.map((row) => [
+    <button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button>,
+    <button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button>,
+    row.entry_date,
+    timeValue(row.measurement_time) ?? "-",
+    row.weight_kg ?? "-",
+    row.systolic_bp && row.diastolic_bp ? `${row.systolic_bp}/${row.diastolic_bp}` : "-",
+    row.blood_sugar ?? "-",
+    row.sugar_context ?? "-",
+    row.body_fat_percent ?? "-",
+    row.shite_count ?? "-",
+    row.notes ?? "-",
+  ])} />;
 }
 
-function HabitTable({ rows }: { rows: HabitLog[] }) {
-  return <Table headers={["Date", "Time", "Name", "Value", "Target", "Done", "Notes"]} rows={rows.map((row) => [row.entry_date, timeValue(row.habit_time) ?? "-", row.name, `${row.value ?? "-"} ${row.unit ?? ""}`, row.target ?? "-", row.completed ? "yes" : "no", row.notes ?? "-"])} />;
+function HabitTable({ rows, editRow, deleteRow }: { rows: HabitLog[]; editRow: (row: HabitLog) => void; deleteRow: (row: HabitLog) => void }) {
+  return <Table headers={["Edit", "Delete", "Date", "Time", "Name", "Value", "Target", "Done", "Notes"]} rows={rows.map((row) => [
+    <button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button>,
+    <button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button>,
+    row.entry_date,
+    timeValue(row.habit_time) ?? "-",
+    row.name,
+    `${row.value ?? "-"} ${row.unit ?? ""}`,
+    row.target ?? "-",
+    row.completed ? "yes" : "no",
+    row.notes ?? "-",
+  ])} />;
 }
 
 function FoodTable({ rows, fastingPlan, editFood, deleteFood }: { rows: FoodLog[]; fastingPlan: string; editFood: (row: FoodLog) => void; deleteFood: (row: FoodLog) => void }) {
@@ -1862,8 +2350,10 @@ function FoodTable({ rows, fastingPlan, editFood, deleteFood }: { rows: FoodLog[
   ])} />;
 }
 
-function ExpenseTable({ rows }: { rows: ExpenseLog[] }) {
-  return <Table headers={["Date", "Time", "Expense", "Type", "Cat", "Mode", "Cost", "Notes"]} rows={rows.map((row) => [
+function ExpenseTable({ rows, editRow, deleteRow }: { rows: ExpenseLog[]; editRow: (row: ExpenseLog) => void; deleteRow: (row: ExpenseLog) => void }) {
+  return <Table headers={["Edit", "Delete", "Date", "Time", "Expense", "Type", "Cat", "Mode", "Cost", "Notes"]} rows={rows.map((row) => [
+    <button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button>,
+    <button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button>,
     row.expense_date,
     timeValue(row.expense_time) ?? "-",
     row.expense,
@@ -1875,8 +2365,10 @@ function ExpenseTable({ rows }: { rows: ExpenseLog[] }) {
   ])} />;
 }
 
-function MedTable({ rows }: { rows: MedLog[] }) {
-  return <Table headers={["Date", "Time", "Meds", "Notes"]} rows={rows.map((row) => [
+function MedTable({ rows, editRow, deleteRow }: { rows: MedLog[]; editRow: (row: MedLog) => void; deleteRow: (row: MedLog) => void }) {
+  return <Table headers={["Edit", "Delete", "Date", "Time", "Meds", "Notes"]} rows={rows.map((row) => [
+    <button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button>,
+    <button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button>,
     row.med_date,
     timeValue(row.med_time) ?? "-",
     row.med_name,
@@ -1908,8 +2400,17 @@ function parseJsonList(value: string | null) {
   }
 }
 
-function ReminderTable({ rows }: { rows: Reminder[] }) {
-  return <Table headers={["Title", "Category", "Due", "Cadence", "Channel", "Done"]} rows={rows.map((row) => [row.title, row.category, row.due_date ?? "-", row.cadence ?? "-", row.channel, row.completed ? "yes" : "no"])} />;
+function ReminderTable({ rows, editRow, deleteRow }: { rows: Reminder[]; editRow: (row: Reminder) => void; deleteRow: (row: Reminder) => void }) {
+  return <Table headers={["Edit", "Delete", "Title", "Category", "Due", "Cadence", "Channel", "Done"]} rows={rows.map((row) => [
+    <button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button>,
+    <button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button>,
+    row.title,
+    row.category,
+    row.due_date ?? "-",
+    row.cadence ?? "-",
+    row.channel,
+    row.completed ? "yes" : "no",
+  ])} />;
 }
 
 function Table({ headers, rows, className = "" }: { headers: string[]; rows: React.ReactNode[][]; className?: string }) {

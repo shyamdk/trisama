@@ -377,6 +377,9 @@ class DailyConsolidatedReportOut(BaseModel):
     habits_done: int = 0
     habits_total: int = 0
     habit_items: list[str] = []
+    med_items: list[str] = []
+    expense_items: list[str] = []
+    total_expenses: float | None = None
     finance_items: list[str] = []
     reminder_items: list[str] = []
     notes: list[str] = []

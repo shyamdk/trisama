@@ -238,6 +238,9 @@ export type DailyConsolidatedReport = {
   habits_done: number;
   habits_total: number;
   habit_items: string[];
+  med_items: string[];
+  expense_items: string[];
+  total_expenses: number | null;
   finance_items: string[];
   reminder_items: string[];
   notes: string[];

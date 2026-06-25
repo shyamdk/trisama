@@ -203,6 +203,11 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.restore-timer {
+  background: #fff;
+  border-color: var(--line);
+}
+
 .timer-meta {
   color: var(--muted);
   font-size: 13px;
@@ -482,6 +487,52 @@ th {
 .table-input {
   min-height: 38px;
   padding: 7px 9px;
+}
+
+.trend-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+}
+
+.trend-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.trend-card .score-row {
+  padding-top: 0;
+}
+
+.sparkline {
+  display: block;
+  height: 118px;
+  margin-top: 8px;
+  width: 100%;
+}
+
+.sparkline-axis {
+  stroke: #d7e0e7;
+  stroke-width: 1;
+}
+
+.sparkline-empty {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  height: 118px;
+  justify-content: center;
+}
+
+.trend-foot {
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  font-weight: 700;
+  justify-content: space-between;
+  margin-top: 4px;
 }
 
 @media (max-width: 980px) {

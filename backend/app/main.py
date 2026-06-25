@@ -342,6 +342,21 @@ def user_query(db: Session, model: type[UserOwnedModel], user_id: int):
     return db.query(model).filter(model.user_id == user_id)
 
 
+def get_owned_item(db: Session, model: type[UserOwnedModel], user_id: int, item_id: int, label: str) -> UserOwnedModel:
+    get_user(db, user_id)
+    item = user_query(db, model, user_id).filter(model.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"{label} not found")
+    return item
+
+
+def apply_payload(item: UserOwnedModel, payload: dict) -> None:
+    for key, value in payload.items():
+        if key == "user_id":
+            continue
+        setattr(item, key, value)
+
+
 def require_post_meal_walk(food_payload: dict) -> None:
     meal_type = food_payload.get("meal_type")
     walk_meters = food_payload.get("post_meal_walk_meters")
@@ -735,6 +750,29 @@ def list_checkins(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(g
     return user_query(db, DailyCheckIn, user_id).order_by(desc(DailyCheckIn.entry_date)).limit(30).all()
 
 
+@app.patch("/checkins/{checkin_id}", response_model=DailyCheckInOut)
+def update_checkin(
+    checkin_id: int,
+    payload: DailyCheckInCreate,
+    user_id: int = Query(DEFAULT_USER_ID),
+    db: Session = Depends(get_db),
+) -> DailyCheckIn:
+    item = get_owned_item(db, DailyCheckIn, user_id, checkin_id, "Journal entry")
+    apply_payload(item, payload.model_dump())
+    db.flush()
+    sync_daily_checklist_completion(db, user_id, item.entry_date)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.delete("/checkins/{checkin_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_checkin(checkin_id: int, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> None:
+    item = get_owned_item(db, DailyCheckIn, user_id, checkin_id, "Journal entry")
+    db.delete(item)
+    db.commit()
+
+
 @app.get("/daily-checklist", response_model=list[DailyChecklistItemOut])
 def get_daily_checklist(
     entry_date: date | None = Query(None),
@@ -788,6 +826,29 @@ def list_health_metrics(user_id: int = Query(DEFAULT_USER_ID), db: Session = Dep
     return user_query(db, HealthMetric, user_id).order_by(desc(HealthMetric.entry_date)).limit(30).all()
 
 
+@app.patch("/health-metrics/{metric_id}", response_model=HealthMetricOut)
+def update_health_metric(
+    metric_id: int,
+    payload: HealthMetricCreate,
+    user_id: int = Query(DEFAULT_USER_ID),
+    db: Session = Depends(get_db),
+) -> HealthMetric:
+    item = get_owned_item(db, HealthMetric, user_id, metric_id, "Health metric")
+    apply_payload(item, payload.model_dump())
+    db.flush()
+    sync_daily_checklist_completion(db, user_id, item.entry_date)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.delete("/health-metrics/{metric_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_health_metric(metric_id: int, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> None:
+    item = get_owned_item(db, HealthMetric, user_id, metric_id, "Health metric")
+    db.delete(item)
+    db.commit()
+
+
 @app.post("/habits", response_model=HabitLogOut)
 def create_habit(payload: HabitLogCreate, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> HabitLog:
     get_user(db, user_id)
@@ -803,6 +864,29 @@ def create_habit(payload: HabitLogCreate, user_id: int = Query(DEFAULT_USER_ID),
 @app.get("/habits", response_model=list[HabitLogOut])
 def list_habits(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> list[HabitLog]:
     return user_query(db, HabitLog, user_id).order_by(desc(HabitLog.entry_date), desc(HabitLog.habit_time)).limit(100).all()
+
+
+@app.patch("/habits/{habit_id}", response_model=HabitLogOut)
+def update_habit(
+    habit_id: int,
+    payload: HabitLogCreate,
+    user_id: int = Query(DEFAULT_USER_ID),
+    db: Session = Depends(get_db),
+) -> HabitLog:
+    item = get_owned_item(db, HabitLog, user_id, habit_id, "Habit log")
+    apply_payload(item, payload.model_dump())
+    db.flush()
+    sync_daily_checklist_completion(db, user_id, item.entry_date)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.delete("/habits/{habit_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_habit(habit_id: int, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> None:
+    item = get_owned_item(db, HabitLog, user_id, habit_id, "Habit log")
+    db.delete(item)
+    db.commit()
 
 
 @app.post("/foods", response_model=FoodLogOut)
@@ -905,6 +989,27 @@ def list_finance_snapshots(user_id: int = Query(DEFAULT_USER_ID), db: Session = 
     return user_query(db, FinanceSnapshot, user_id).order_by(desc(FinanceSnapshot.entry_date)).limit(200).all()
 
 
+@app.patch("/finance-snapshots/{snapshot_id}", response_model=FinanceSnapshotOut)
+def update_finance_snapshot(
+    snapshot_id: int,
+    payload: FinanceSnapshotCreate,
+    user_id: int = Query(DEFAULT_USER_ID),
+    db: Session = Depends(get_db),
+) -> FinanceSnapshot:
+    item = get_owned_item(db, FinanceSnapshot, user_id, snapshot_id, "Finance snapshot")
+    apply_payload(item, payload.model_dump())
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.delete("/finance-snapshots/{snapshot_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_finance_snapshot(snapshot_id: int, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> None:
+    item = get_owned_item(db, FinanceSnapshot, user_id, snapshot_id, "Finance snapshot")
+    db.delete(item)
+    db.commit()
+
+
 @app.post("/expenses", response_model=ExpenseLogOut)
 def create_expense(payload: ExpenseLogCreate, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> ExpenseLog:
     get_user(db, user_id)
@@ -918,6 +1023,27 @@ def create_expense(payload: ExpenseLogCreate, user_id: int = Query(DEFAULT_USER_
 @app.get("/expenses", response_model=list[ExpenseLogOut])
 def list_expenses(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> list[ExpenseLog]:
     return user_query(db, ExpenseLog, user_id).order_by(desc(ExpenseLog.expense_date), desc(ExpenseLog.expense_time)).limit(200).all()
+
+
+@app.patch("/expenses/{expense_id}", response_model=ExpenseLogOut)
+def update_expense(
+    expense_id: int,
+    payload: ExpenseLogCreate,
+    user_id: int = Query(DEFAULT_USER_ID),
+    db: Session = Depends(get_db),
+) -> ExpenseLog:
+    item = get_owned_item(db, ExpenseLog, user_id, expense_id, "Expense")
+    apply_payload(item, payload.model_dump())
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.delete("/expenses/{expense_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_expense(expense_id: int, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> None:
+    item = get_owned_item(db, ExpenseLog, user_id, expense_id, "Expense")
+    db.delete(item)
+    db.commit()
 
 
 @app.post("/meds", response_model=MedLogOut)
@@ -935,6 +1061,27 @@ def list_meds(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_d
     return user_query(db, MedLog, user_id).order_by(desc(MedLog.med_date), desc(MedLog.med_time)).limit(200).all()
 
 
+@app.patch("/meds/{med_id}", response_model=MedLogOut)
+def update_med(
+    med_id: int,
+    payload: MedLogCreate,
+    user_id: int = Query(DEFAULT_USER_ID),
+    db: Session = Depends(get_db),
+) -> MedLog:
+    item = get_owned_item(db, MedLog, user_id, med_id, "Med log")
+    apply_payload(item, payload.model_dump())
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.delete("/meds/{med_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_med(med_id: int, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> None:
+    item = get_owned_item(db, MedLog, user_id, med_id, "Med log")
+    db.delete(item)
+    db.commit()
+
+
 @app.post("/reminders", response_model=ReminderOut)
 def create_reminder(payload: ReminderCreate, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> Reminder:
     get_user(db, user_id)
@@ -948,6 +1095,27 @@ def create_reminder(payload: ReminderCreate, user_id: int = Query(DEFAULT_USER_I
 @app.get("/reminders", response_model=list[ReminderOut])
 def list_reminders(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> list[Reminder]:
     return user_query(db, Reminder, user_id).order_by(desc(Reminder.created_at)).limit(100).all()
+
+
+@app.patch("/reminders/{reminder_id}", response_model=ReminderOut)
+def update_reminder(
+    reminder_id: int,
+    payload: ReminderCreate,
+    user_id: int = Query(DEFAULT_USER_ID),
+    db: Session = Depends(get_db),
+) -> Reminder:
+    item = get_owned_item(db, Reminder, user_id, reminder_id, "Reminder")
+    apply_payload(item, payload.model_dump())
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.delete("/reminders/{reminder_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_reminder(reminder_id: int, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> None:
+    item = get_owned_item(db, Reminder, user_id, reminder_id, "Reminder")
+    db.delete(item)
+    db.commit()
 
 
 @app.post("/challenges", response_model=ChallengeOut)
@@ -977,12 +1145,23 @@ def list_challenges(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends
     return user_query(db, Challenge, user_id).order_by(desc(Challenge.start_date), desc(Challenge.created_at)).limit(50).all()
 
 
+@app.patch("/challenges/{challenge_id}", response_model=ChallengeOut)
+def update_challenge(
+    challenge_id: int,
+    payload: ChallengeCreate,
+    user_id: int = Query(DEFAULT_USER_ID),
+    db: Session = Depends(get_db),
+) -> Challenge:
+    item = get_owned_item(db, Challenge, user_id, challenge_id, "Challenge")
+    apply_payload(item, payload.model_dump())
+    db.commit()
+    db.refresh(item)
+    return item
+
+
 @app.delete("/challenges/{challenge_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_challenge(challenge_id: int, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> None:
-    get_user(db, user_id)
-    item = user_query(db, Challenge, user_id).filter(Challenge.id == challenge_id).first()
-    if not item:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Challenge not found")
+    item = get_owned_item(db, Challenge, user_id, challenge_id, "Challenge")
     db.delete(item)
     db.commit()
 
@@ -1062,6 +1241,8 @@ def build_daily_reports(
     health: list[HealthMetric],
     habits: list[HabitLog],
     foods: list[FoodLog],
+    expenses: list[ExpenseLog],
+    meds: list[MedLog],
     finance: list[FinanceSnapshot],
     reminders: list[Reminder],
 ) -> list[dict]:
@@ -1070,6 +1251,8 @@ def build_daily_reports(
         *[row.entry_date for row in health],
         *[row.entry_date for row in habits],
         *[row.entry_date for row in foods],
+        *[row.expense_date for row in expenses],
+        *[row.med_date for row in meds],
         *[row.entry_date for row in finance],
         *[row.due_date for row in reminders if row.due_date],
     }
@@ -1111,6 +1294,8 @@ def build_daily_reports(
         )
 
         date_habits = [row for row in habits if row.entry_date == entry_date]
+        date_expenses = [row for row in expenses if row.expense_date == entry_date]
+        date_meds = [row for row in meds if row.med_date == entry_date]
         date_finance = [row for row in finance if row.entry_date == entry_date]
         date_reminders = [row for row in reminders if row.due_date == entry_date]
         date_checkins = [row for row in checkins if row.entry_date == entry_date]
@@ -1131,6 +1316,8 @@ def build_daily_reports(
                 *[row.notes for row in date_health],
                 *[row.notes for row in date_foods],
                 *[row.notes for row in date_habits],
+                *[row.notes for row in date_expenses],
+                *[row.notes for row in date_meds],
                 *[row.notes for row in date_finance],
                 *[row.notes for row in date_reminders],
                 *journal_notes,
@@ -1170,6 +1357,15 @@ def build_daily_reports(
                     + (" done" if row.completed else "")
                     for row in date_habits
                 ],
+                "med_items": [
+                    (f"{row.med_time} " if row.med_time else "") + row.med_name
+                    for row in sorted(date_meds, key=lambda item: item.med_time or datetime.min.time())
+                ],
+                "expense_items": [
+                    f"{row.expense}: {row.cost:.0f} ({row.expense_type}, {row.expense_mode})"
+                    for row in sorted(date_expenses, key=lambda item: item.expense_time or datetime.min.time())
+                ],
+                "total_expenses": sum(row.cost for row in date_expenses) if date_expenses else None,
                 "finance_items": [
                     f"{row.kind}: {row.name} asset {row.value:.0f}, liability {row.liability_value:.0f}"
                     for row in date_finance
@@ -1191,6 +1387,8 @@ def get_report(period: str, user_id: int = Query(DEFAULT_USER_ID), db: Session =
     health = user_query(db, HealthMetric, user_id).order_by(desc(HealthMetric.entry_date)).limit(90).all()
     habits = user_query(db, HabitLog, user_id).order_by(desc(HabitLog.entry_date)).limit(500).all()
     foods = user_query(db, FoodLog, user_id).order_by(desc(FoodLog.entry_date)).limit(500).all()
+    expenses = user_query(db, ExpenseLog, user_id).order_by(desc(ExpenseLog.expense_date)).limit(500).all()
+    meds = user_query(db, MedLog, user_id).order_by(desc(MedLog.med_date)).limit(500).all()
     finance = user_query(db, FinanceSnapshot, user_id).order_by(desc(FinanceSnapshot.entry_date)).limit(500).all()
     reminders = user_query(db, Reminder, user_id).order_by(desc(Reminder.created_at)).limit(500).all()
     challenges = user_query(db, Challenge, user_id).order_by(desc(Challenge.start_date), desc(Challenge.created_at)).limit(50).all()
@@ -1229,5 +1427,5 @@ def get_report(period: str, user_id: int = Query(DEFAULT_USER_ID), db: Session =
         "recommendations": recommendations,
         "finance_summary": finance_summary,
         "challenges": build_challenge_reports(challenges, health),
-        "daily_reports": build_daily_reports(checkins, health, habits, foods, finance, reminders),
+        "daily_reports": build_daily_reports(checkins, health, habits, foods, expenses, meds, finance, reminders),
     }
