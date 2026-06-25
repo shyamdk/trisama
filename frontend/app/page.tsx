@@ -196,6 +196,44 @@ function timeValue(value?: string | null) {
   return value ? value.slice(0, 5) : null;
 }
 
+function hourFromTime(value?: string | null) {
+  const normalized = timeValue(value) ?? currentTime();
+  const hour = Number(normalized.split(":")[0]);
+  return Number.isFinite(hour) ? hour : new Date().getHours();
+}
+
+function suggestedMealTypeForTime(value?: string | null) {
+  const hour = hourFromTime(value);
+  if (hour < 12) return "Breakfast";
+  return hour < 17 ? "Lunch" : "Dinner";
+}
+
+const commonFoodMealTypes = ["Snack", "Drink"];
+
+function allowedMealTypesForTime(value?: string | null) {
+  return hourFromTime(value) < 12 ? ["Breakfast", ...commonFoodMealTypes] : ["Lunch", "Dinner", ...commonFoodMealTypes];
+}
+
+function mealTypeOptionsForTime(configuredOptions: string[], value?: string | null, current?: string | null) {
+  const allowed = allowedMealTypesForTime(value);
+  const options = configuredOptions.filter((item) => allowed.includes(item));
+  for (const item of allowed) {
+    if (!options.includes(item)) {
+      options.push(item);
+    }
+  }
+  return optionsWithCurrent(options, current);
+}
+
+function mealTimeValidationMessage(mealTime: string | null | undefined, mealType: string | null | undefined) {
+  if (!mealType) return "Select a meal type.";
+  const allowed = allowedMealTypesForTime(mealTime);
+  if (allowed.includes(mealType)) return "";
+  return hourFromTime(mealTime) < 12
+    ? "AM food logs can only be saved as Breakfast, Snack, or Drink."
+    : "PM food logs can only be saved as Lunch, Dinner, Snack, or Drink.";
+}
+
 function sameLocalDate(left: Date, right: Date) {
   return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate();
 }
@@ -1106,7 +1144,13 @@ function JournalView({ checkins, saving, submitJournal, deleteJournal }: { check
           </div>
         </form>
       </Panel>
-      <Panel title="Recent Journal Entries"><JournalTable rows={checkins} editRow={setEditingCheckin} deleteRow={handleDelete} /></Panel>
+      <Panel title="Recent Journal Entries">
+        <TodaySplitTable
+          rows={checkins}
+          getDate={(row) => row.entry_date}
+          renderTable={(rows) => <JournalTable rows={rows} editRow={setEditingCheckin} deleteRow={handleDelete} />}
+        />
+      </Panel>
     </div>
   );
 }
@@ -1205,7 +1249,13 @@ function HealthView({ health, dropdownOptions, saving, submitHealthMetric, delet
           </form>
         </Panel>
       )}
-      <Panel title="Recent Health Logs"><HealthTable rows={health} editRow={setEditingHealth} deleteRow={handleDelete} /></Panel>
+      <Panel title="Recent Health Logs">
+        <TodaySplitTable
+          rows={health}
+          getDate={(row) => row.entry_date}
+          renderTable={(rows) => <HealthTable rows={rows} editRow={setEditingHealth} deleteRow={handleDelete} />}
+        />
+      </Panel>
     </div>
   );
 }
@@ -1242,7 +1292,13 @@ function MedsView({ meds, dropdownOptions, saving, submitMed, deleteMed }: { med
           </div>
         </form>
       </Panel>
-      <Panel title="Recent Meds"><MedTable rows={meds} editRow={setEditingMed} deleteRow={handleDelete} /></Panel>
+      <Panel title="Recent Meds">
+        <TodaySplitTable
+          rows={meds}
+          getDate={(row) => row.med_date}
+          renderTable={(rows) => <MedTable rows={rows} editRow={setEditingMed} deleteRow={handleDelete} />}
+        />
+      </Panel>
     </div>
   );
 }
@@ -1251,21 +1307,37 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState("");
   const [editingFood, setEditingFood] = useState<FoodLog | null>(null);
-  const [selectedMealType, setSelectedMealType] = useState(editingFood?.meal_type ?? "Breakfast");
+  const [mealTime, setMealTime] = useState(currentTime());
+  const [selectedMealType, setSelectedMealType] = useState(suggestedMealTypeForTime(currentTime()));
   const [postMealWalkMeters, setPostMealWalkMeters] = useState(editingFood?.post_meal_walk_meters === null || editingFood?.post_meal_walk_meters === undefined ? "" : String(editingFood.post_meal_walk_meters));
-  const mealTypeOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "meal_type"), editingFood?.meal_type);
+  const mealTypeOptions = mealTypeOptionsForTime(dropdownValues(dropdownOptions, "meal_type"), mealTime, editingFood?.meal_type);
   const calorieRows = useMemo(() => dailyCalorieRows(foods, calorieTarget), [foods, calorieTarget]);
   const fastingRows = useMemo(() => dailyFastingRows(foods), [foods]);
   const walkRequired = requiresPostMealWalk(selectedMealType);
   const walkDistanceReady = !walkRequired || Number(postMealWalkMeters) > 0;
+  const mealValidationMessage = mealTimeValidationMessage(mealTime, selectedMealType);
 
   useEffect(() => {
-    setSelectedMealType(editingFood?.meal_type ?? "Breakfast");
+    const nextMealTime = timeValue(editingFood?.meal_time) ?? currentTime();
+    setMealTime(nextMealTime);
+    setSelectedMealType(editingFood?.meal_type ?? suggestedMealTypeForTime(nextMealTime));
     setPostMealWalkMeters(editingFood?.post_meal_walk_meters === null || editingFood?.post_meal_walk_meters === undefined ? "" : String(editingFood.post_meal_walk_meters));
   }, [editingFood]);
 
+  function updateMealTime(value: string) {
+    setMealTime(value);
+    setSelectedMealType(suggestedMealTypeForTime(value));
+    setAnalyzeError("");
+  }
+
   async function handleFoodSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const validationMessage = mealTimeValidationMessage(text(form, "meal_time"), text(form, "meal_type"));
+    if (validationMessage) {
+      setAnalyzeError(validationMessage);
+      return;
+    }
     if (editingFood && !foods.some((food) => food.id === editingFood.id)) {
       setEditingFood(null);
       return;
@@ -1273,7 +1345,9 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
     try {
       await submitFood(event, editingFood?.id);
       setEditingFood(null);
-      setSelectedMealType("Breakfast");
+      const resetTime = currentTime();
+      setMealTime(resetTime);
+      setSelectedMealType(suggestedMealTypeForTime(resetTime));
       setPostMealWalkMeters("");
     } catch (error) {
       if (error instanceof Error && error.message.includes("Food log not found")) {
@@ -1289,6 +1363,11 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
     const foodItem = text(data, "food_item");
     if (!foodItem) {
       setAnalyzeError("Enter food items before analyzing.");
+      return;
+    }
+    const validationMessage = mealTimeValidationMessage(text(data, "meal_time"), text(data, "meal_type"));
+    if (validationMessage) {
+      setAnalyzeError(validationMessage);
       return;
     }
     if (requiresPostMealWalk(text(data, "meal_type")) && !(numeric(data, "post_meal_walk_meters") ?? 0)) {
@@ -1331,14 +1410,15 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
         <form className="section" key={editingFood?.id ?? "new-food"} onSubmit={handleFoodSubmit}>
           <div className="form-grid">
             <label>Entry date<input name="entry_date" type="date" defaultValue={editingFood?.entry_date ?? isoDate()} min={editingFood ? undefined : isoDate(-2)} max={isoDate()} required /></label>
-            <label>Meal time<input name="meal_time" type="time" defaultValue={timeValue(editingFood?.meal_time) ?? currentTime()} /></label>
-            <label>Meal type<select name="meal_type" value={selectedMealType} onChange={(event) => setSelectedMealType(event.currentTarget.value)} required>{mealTypeOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label>Meal time<input name="meal_time" type="time" value={mealTime} onChange={(event) => updateMealTime(event.currentTarget.value)} required /></label>
+            <label>Meal type<select name="meal_type" value={selectedMealType} onChange={(event) => { setSelectedMealType(event.currentTarget.value); setAnalyzeError(""); }} required>{mealTypeOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
             <label className="wide-field">Food items<textarea className="compact-textarea" name="food_item" defaultValue={editingFood?.food_item ?? ""} placeholder="boiled egg (3), veges (100 gms)" /></label>
             <label>Post-meal walk distance (meters)<input name="post_meal_walk_meters" type="number" min="1" step="1" value={postMealWalkMeters} onChange={(event) => setPostMealWalkMeters(event.currentTarget.value)} required={walkRequired} /></label>
-            <button className="button mini secondary" type="button" disabled={saving || analyzing || !walkDistanceReady} onClick={(event) => analyzeFood(event.currentTarget.form!)}>{analyzing ? "Analyzing..." : "Analyze"}</button>
+            <button className="button mini secondary" type="button" disabled={saving || analyzing || !walkDistanceReady || Boolean(mealValidationMessage)} onClick={(event) => analyzeFood(event.currentTarget.form!)}>{analyzing ? "Analyzing..." : "Analyze"}</button>
             <label>Calories<input name="calories" type="number" step="0.1" defaultValue={editingFood?.calories ?? ""} /></label>
             <label>Quality score<input name="quality_score" type="number" min="0" max="100" defaultValue={editingFood?.quality_score ?? ""} /></label>
           </div>
+          {mealValidationMessage && <p className="danger">{mealValidationMessage}</p>}
           {walkRequired && !walkDistanceReady && <p className="muted">Post-meal walk distance in meters is required before analysis for breakfast, lunch, and dinner.</p>}
           {analyzeError && <p className="danger">{analyzeError}</p>}
           <div className="checkbox-group">
@@ -1348,7 +1428,7 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
           </div>
           <label>Comments<textarea name="notes" defaultValue={editingFood?.notes ?? ""} placeholder="AI comments on ingredients, quantity, quality, and risk flags can be updated here." /></label>
           <div className="actions">
-            <button className="button" disabled={saving}>{editingFood ? "Update Food" : "Save Food"}</button>
+            <button className="button" disabled={saving || Boolean(mealValidationMessage)}>{editingFood ? "Update Food" : "Save Food"}</button>
             {editingFood && <button className="button secondary" type="button" onClick={cancelEdit}>Cancel Edit</button>}
           </div>
         </form>
@@ -1360,7 +1440,13 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
         <Panel title="Overnight Fasting">
           <Table headers={["Dinner Date", "Dinner", "Next Breakfast", "Fasted", "Target", "Balance"]} rows={fastingRows.map((row) => [row.dinnerDate, row.dinnerTime, `${row.breakfastDate} ${row.breakfastTime}`, row.fasted, "16h", row.balance])} />
         </Panel>
-        <Panel title="Recent Food Logs"><FoodTable rows={foods} fastingPlan={fastingPlan} editFood={setEditingFood} deleteFood={handleDeleteFood} /></Panel>
+        <Panel title="Recent Food Logs">
+          <TodaySplitTable
+            rows={foods}
+            getDate={(row) => row.entry_date}
+            renderTable={(rows) => <FoodTable rows={rows} fastingPlan={fastingPlan} editFood={setEditingFood} deleteFood={handleDeleteFood} />}
+          />
+        </Panel>
       </div>
     </div>
   );
@@ -1545,7 +1631,13 @@ function ExerciseView({ rows, dropdownOptions, saving, submitHabit, deleteHabit 
           <HabitEditForm row={editingHabit} saving={saving} submit={handleEditSubmit} cancel={() => setEditingHabit(null)} />
         </Panel>
       )}
-      <Panel title="Recent Exercise Logs"><HabitTable rows={rows} editRow={setEditingHabit} deleteRow={handleDelete} /></Panel>
+      <Panel title="Recent Exercise Logs">
+        <TodaySplitTable
+          rows={rows}
+          getDate={(row) => row.entry_date}
+          renderTable={(rows) => <HabitTable rows={rows} editRow={setEditingHabit} deleteRow={handleDelete} />}
+        />
+      </Panel>
     </div>
   );
 }
@@ -1630,7 +1722,13 @@ function HabitView({ title, category, rows, saving, submitHabit, deleteHabit, pr
           <HabitEditForm row={editingHabit} saving={saving} submit={handleEditSubmit} cancel={() => setEditingHabit(null)} presets={presets} />
         </Panel>
       )}
-      <Panel title={`Recent ${title} Logs`}><HabitTable rows={rows} editRow={setEditingHabit} deleteRow={handleDelete} /></Panel>
+      <Panel title={`Recent ${title} Logs`}>
+        <TodaySplitTable
+          rows={rows}
+          getDate={(row) => row.entry_date}
+          renderTable={(rows) => <HabitTable rows={rows} editRow={setEditingHabit} deleteRow={handleDelete} />}
+        />
+      </Panel>
     </div>
   );
 }
@@ -1678,7 +1776,13 @@ function ExpenseTrackerView({ expenses, dropdownOptions, saving, submitExpense, 
             </div>
           </form>
         </Panel>
-        <Panel title="Recent Expenses"><ExpenseTable rows={expenses} editRow={setEditingExpense} deleteRow={handleDelete} /></Panel>
+        <Panel title="Recent Expenses">
+          <TodaySplitTable
+            rows={expenses}
+            getDate={(row) => row.expense_date}
+            renderTable={(rows) => <ExpenseTable rows={rows} editRow={setEditingExpense} deleteRow={handleDelete} />}
+          />
+        </Panel>
       </div>
     </div>
   );
@@ -1720,7 +1824,13 @@ function ReminderView({ reminders, dropdownOptions, saving, submitReminder, dele
           </div>
         </form>
       </Panel>
-      <Panel title="Reminder List"><ReminderTable rows={reminders} editRow={setEditingReminder} deleteRow={handleDelete} /></Panel>
+      <Panel title="Reminder List">
+        <TodaySplitTable
+          rows={reminders}
+          getDate={(row) => row.due_date}
+          renderTable={(rows) => <ReminderTable rows={rows} editRow={setEditingReminder} deleteRow={handleDelete} />}
+        />
+      </Panel>
     </div>
   );
 }
@@ -2039,8 +2149,8 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
     <div className="stack">
       <div className="actions"><button className="button secondary" onClick={() => load("daily")}>Daily</button><button className="button secondary" onClick={() => load("weekly")}>Weekly</button><button className="button secondary" onClick={() => load("monthly")}>Monthly</button><button className="button secondary" onClick={() => load("quarterly")}>Quarterly</button></div>
       <section className="grid metrics"><Metric title="Period" value={report.period} note="Generated report" /><Metric title="Life Score" value={String(report.life_score)} note="0-1000" /><Metric title="Accountability" value={String(report.accountability_score)} note="Logging" /></section>
-      <Panel title="Entry Change Graph">
-        <ReportTrendChart days={report.daily_reports ?? []} />
+      <Panel title="Weight Trend">
+        <WeightTrendChart days={report.daily_reports ?? []} />
       </Panel>
       <Panel title="All Entry List">
         <ReportEntryList days={report.daily_reports ?? []} />
@@ -2124,154 +2234,139 @@ function reportDaysAscending(days: Report["daily_reports"]) {
   return [...days].sort((left, right) => left.entry_date.localeCompare(right.entry_date));
 }
 
-function dayEntryCount(day: Report["daily_reports"][number]) {
-  const healthCount = [
-    day.weight_kg,
-    day.bp,
-    day.sugar,
-    day.body_fat_percent,
-    day.muscle_percent,
-    day.visceral_fat,
-    day.body_age,
-    day.bmr,
-    day.shite_count,
-  ].filter((value) => value !== null && value !== undefined).length;
-  return healthCount + day.food_count + day.habits_total + (day.med_items?.length ?? 0) + (day.expense_items?.length ?? 0) + (day.reminder_items?.length ?? 0);
+type WeightPoint = {
+  entryDate: string;
+  weightKg: number;
+};
+
+function weightPointsForReport(days: Report["daily_reports"]) {
+  return reportDaysAscending(days)
+    .filter((day) => day.weight_kg !== null)
+    .map((day) => ({ entryDate: day.entry_date, weightKg: day.weight_kg as number }));
 }
 
-function formatTrendValue(value: number | null, unit: string) {
-  if (value === null || Number.isNaN(value)) return "-";
-  const rounded = Number.isInteger(value) ? value : Number(value.toFixed(1));
-  return unit === "Rs" ? `Rs ${rounded}` : `${rounded}${unit ? ` ${unit}` : ""}`;
+function weightDeltaLabel(delta: number) {
+  if (Math.abs(delta) < 0.05) return "No change";
+  return `${delta > 0 ? "+" : ""}${delta.toFixed(1)} kg`;
 }
 
-function ReportTrendChart({ days }: { days: Report["daily_reports"] }) {
-  const sortedDays = reportDaysAscending(days).slice(-30);
-  const metrics = [
-    {
-      label: "Entries",
-      unit: "",
-      color: "#0f766e",
-      values: sortedDays.map((day) => dayEntryCount(day)),
-    },
-    {
-      label: "Weight",
-      unit: "kg",
-      color: "#2563eb",
-      values: sortedDays.map((day) => day.weight_kg),
-    },
-    {
-      label: "Sugar",
-      unit: "",
-      color: "#b45309",
-      values: sortedDays.map((day) => day.sugar),
-    },
-    {
-      label: "Calories",
-      unit: "cal",
-      color: "#7c3aed",
-      values: sortedDays.map((day) => day.total_calories),
-    },
-    {
-      label: "Expenses",
-      unit: "Rs",
-      color: "#b91c1c",
-      values: sortedDays.map((day) => day.total_expenses),
-    },
-  ].filter((metric) => metric.values.filter((value) => value !== null && value !== undefined).length >= 2);
-
-  if (!sortedDays.length) {
-    return <p className="muted section">No report entries yet.</p>;
+function WeightTrendChart({ days }: { days: Report["daily_reports"] }) {
+  const points = weightPointsForReport(days).slice(-90);
+  if (!points.length) {
+    return <p className="muted section">No weight logs yet.</p>;
   }
 
-  if (!metrics.length) {
-    return <p className="muted section">Add at least two days of entries to see change graphs.</p>;
-  }
-
-  return (
-    <div className="trend-grid section">
-      {metrics.map((metric) => (
-        <TrendCard
-          key={metric.label}
-          label={metric.label}
-          unit={metric.unit}
-          color={metric.color}
-          dates={sortedDays.map((day) => day.entry_date)}
-          values={metric.values}
-        />
-      ))}
-    </div>
-  );
-}
-
-function TrendCard({ label, unit, color, dates, values }: { label: string; unit: string; color: string; dates: string[]; values: (number | null)[] }) {
-  const points = values
-    .map((value, index) => ({ value, index }))
-    .filter((point): point is { value: number; index: number } => point.value !== null && point.value !== undefined && !Number.isNaN(point.value));
   const first = points[0];
   const latest = points[points.length - 1];
+  const values = points.map((point) => point.weightKg);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const totalChange = latest.weightKg - first.weightKg;
+  const previous = points.length > 1 ? points[points.length - 2] : null;
+  const latestChange = previous ? latest.weightKg - previous.weightKg : 0;
+  const recentRows = [...points].slice(-10).reverse();
 
   return (
-    <div className="trend-card">
-      <div className="score-row">
-        <span>{label}</span>
-        <strong>{latest ? formatTrendValue(latest.value, unit) : "-"}</strong>
+    <div className="weight-report section">
+      <div className="weight-stat-grid">
+        <div className="trend-card">
+          <div className="muted">Latest</div>
+          <strong>{latest.weightKg.toFixed(1)} kg</strong>
+          <span>{latest.entryDate}</span>
+        </div>
+        <div className="trend-card">
+          <div className="muted">Total Change</div>
+          <strong>{weightDeltaLabel(totalChange)}</strong>
+          <span>Since {first.entryDate}</span>
+        </div>
+        <div className="trend-card">
+          <div className="muted">Last Move</div>
+          <strong>{points.length > 1 ? weightDeltaLabel(latestChange) : "-"}</strong>
+          <span>{points.length} logged day{points.length === 1 ? "" : "s"}</span>
+        </div>
+        <div className="trend-card">
+          <div className="muted">Range</div>
+          <strong>{min.toFixed(1)} - {max.toFixed(1)} kg</strong>
+          <span>Avg {average.toFixed(1)} kg</span>
+        </div>
       </div>
-      <Sparkline values={values} color={color} />
-      <div className="trend-foot">
-        <span>{first ? dates[first.index] : "-"}</span>
-        <span>{latest ? dates[latest.index] : "-"}</span>
-      </div>
+      <WeightTrendSvg points={points} />
+      <Table
+        headers={["Date", "Weight", "Change"]}
+        rows={recentRows.map((point, index) => {
+          const previousPoint = points[points.length - 1 - index - 1];
+          const delta = previousPoint ? point.weightKg - previousPoint.weightKg : 0;
+          return [point.entryDate, `${point.weightKg.toFixed(1)} kg`, previousPoint ? weightDeltaLabel(delta) : "-"];
+        })}
+      />
     </div>
   );
 }
 
-function Sparkline({ values, color }: { values: (number | null)[]; color: string }) {
-  const width = 320;
-  const height = 118;
-  const padding = 16;
-  const points = values
-    .map((value, index) => ({ value, index }))
-    .filter((point): point is { value: number; index: number } => point.value !== null && point.value !== undefined && !Number.isNaN(point.value));
-  if (points.length < 2) {
-    return <div className="sparkline-empty">Not enough data</div>;
-  }
-  const min = Math.min(...points.map((point) => point.value));
-  const max = Math.max(...points.map((point) => point.value));
+function WeightTrendSvg({ points }: { points: WeightPoint[] }) {
+  const width = 760;
+  const height = 300;
+  const padding = { top: 26, right: 34, bottom: 42, left: 56 };
+  const values = points.map((point) => point.weightKg);
+  const rawMin = Math.min(...values);
+  const rawMax = Math.max(...values);
+  const min = Math.floor(rawMin - 0.5);
+  const max = Math.ceil(rawMax + 0.5);
   const range = max - min || 1;
-  const xDenominator = Math.max(1, values.length - 1);
-  const coordinates = points.map((point) => {
-    const x = padding + (point.index / xDenominator) * (width - padding * 2);
-    const y = height - padding - ((point.value - min) / range) * (height - padding * 2);
+  const xDenominator = Math.max(1, points.length - 1);
+  const coordinates = points.map((point, index) => {
+    const x = padding.left + (index / xDenominator) * (width - padding.left - padding.right);
+    const y = height - padding.bottom - ((point.weightKg - min) / range) * (height - padding.top - padding.bottom);
     return { ...point, x, y };
   });
   const polylinePoints = coordinates.map((point) => `${point.x},${point.y}`).join(" ");
+  const areaPoints = `${padding.left},${height - padding.bottom} ${polylinePoints} ${width - padding.right},${height - padding.bottom}`;
+  const yTicks = [min, min + range * 0.25, min + range * 0.5, min + range * 0.75, max];
+  const first = coordinates[0];
   const latest = coordinates[coordinates.length - 1];
+  const middle = coordinates[Math.floor(coordinates.length / 2)];
+  const labelPoints = coordinates.length > 2 ? [first, middle, latest] : coordinates.length > 1 ? [first, latest] : [first];
 
   return (
-    <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Trend line">
-      <line x1={padding} y1={padding} x2={padding} y2={height - padding} className="sparkline-axis" />
-      <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} className="sparkline-axis" />
-      <polyline points={polylinePoints} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx={latest.x} cy={latest.y} r="4" fill={color} />
-    </svg>
+    <div className="weight-chart-wrap">
+      <svg className="weight-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Weight trend chart">
+        {yTicks.map((tick) => {
+          const y = height - padding.bottom - ((tick - min) / range) * (height - padding.top - padding.bottom);
+          return (
+            <g key={tick}>
+              <line x1={padding.left} y1={y} x2={width - padding.right} y2={y} className="weight-grid-line" />
+              <text x={padding.left - 10} y={y + 4} textAnchor="end" className="weight-axis-label">{tick.toFixed(1)}</text>
+            </g>
+          );
+        })}
+        <polygon points={areaPoints} className="weight-area" />
+        <polyline points={polylinePoints} className="weight-line" />
+        {coordinates.map((point) => (
+          <circle key={`${point.entryDate}-${point.weightKg}`} cx={point.x} cy={point.y} r="4" className="weight-point" />
+        ))}
+        {labelPoints.map((point) => (
+          <g key={`label-${point.entryDate}`}>
+            <text x={point.x} y={height - 16} textAnchor="middle" className="weight-axis-label">{point.entryDate.slice(5)}</text>
+          </g>
+        ))}
+        <text x={latest.x} y={Math.max(padding.top + 4, latest.y - 12)} textAnchor="middle" className="weight-latest-label">{latest.weightKg.toFixed(1)} kg</text>
+      </svg>
+    </div>
   );
 }
 
 function ReportEntryList({ days }: { days: Report["daily_reports"] }) {
   return (
     <Table
-      headers={["Date", "Entries", "Weight", "BP", "Sugar", "Food", "Habits", "Meds", "Expenses", "Reminders"]}
+      headers={["Date", "Weight", "BP", "Food", "Habits", "Meds", "Reminders"]}
       rows={days.map((day) => [
         day.entry_date,
-        dayEntryCount(day),
         day.weight_kg === null ? "-" : `${day.weight_kg} kg`,
         day.bp ?? "-",
-        day.sugar === null ? "-" : `${day.sugar}${day.sugar_context ? ` ${day.sugar_context}` : ""}`,
-        `${day.food_count} items${day.total_calories === null ? "" : ` / ${Math.round(day.total_calories)} cal`}`,
+        `${day.food_count} item${day.food_count === 1 ? "" : "s"}`,
         `${day.habits_done}/${day.habits_total}`,
         day.med_items?.length ? listOrDash(day.med_items) : "-",
-        day.total_expenses === null || day.total_expenses === undefined ? "-" : `Rs ${Math.round(day.total_expenses)}`,
         day.reminder_items?.length ? listOrDash(day.reminder_items) : "-",
       ])}
     />
@@ -2411,6 +2506,25 @@ function ReminderTable({ rows, editRow, deleteRow }: { rows: Reminder[]; editRow
     row.channel,
     row.completed ? "yes" : "no",
   ])} />;
+}
+
+function TodaySplitTable<T>({ rows, getDate, renderTable }: { rows: T[]; getDate: (row: T) => string | null | undefined; renderTable: (rows: T[]) => React.ReactNode }) {
+  const today = isoDate();
+  const todayRows = rows.filter((row) => getDate(row) === today);
+  const otherRows = rows.filter((row) => getDate(row) !== today);
+
+  return (
+    <div className="split-log-section section">
+      <div>
+        <h3>Today</h3>
+        {renderTable(todayRows)}
+      </div>
+      <div>
+        <h3>Earlier</h3>
+        {renderTable(otherRows)}
+      </div>
+    </div>
+  );
 }
 
 function Table({ headers, rows, className = "" }: { headers: string[]; rows: React.ReactNode[][]; className?: string }) {

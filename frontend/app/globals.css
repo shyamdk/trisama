@@ -489,6 +489,21 @@ th {
   padding: 7px 9px;
 }
 
+.split-log-section {
+  display: grid;
+  gap: 18px;
+}
+
+.split-log-section h3 {
+  color: var(--muted);
+  font-size: 13px;
+  text-transform: uppercase;
+}
+
+.split-log-section .table-wrap {
+  margin-top: 10px;
+}
+
 .trend-grid {
   display: grid;
   gap: 12px;
@@ -533,6 +548,80 @@ th {
   font-weight: 700;
   justify-content: space-between;
   margin-top: 4px;
+}
+
+.weight-report {
+  display: grid;
+  gap: 14px;
+}
+
+.weight-stat-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+}
+
+.weight-stat-grid .trend-card {
+  display: grid;
+  gap: 4px;
+}
+
+.weight-stat-grid strong {
+  font-size: 20px;
+}
+
+.weight-stat-grid span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.weight-chart-wrap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow-x: auto;
+  padding: 10px;
+}
+
+.weight-chart {
+  display: block;
+  min-width: 720px;
+  width: 100%;
+}
+
+.weight-grid-line {
+  stroke: #d7e0e7;
+  stroke-width: 1;
+}
+
+.weight-area {
+  fill: rgba(15, 118, 110, 0.12);
+}
+
+.weight-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 4;
+}
+
+.weight-point {
+  fill: #fff;
+  stroke: var(--accent-dark);
+  stroke-width: 3;
+}
+
+.weight-axis-label {
+  fill: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.weight-latest-label {
+  fill: var(--accent-dark);
+  font-size: 13px;
+  font-weight: 800;
 }
 
 @media (max-width: 980px) {
