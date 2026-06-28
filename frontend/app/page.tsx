@@ -116,7 +116,7 @@ const defaultDropdownOptions: Record<string, string[]> = {
   ],
   expense_category: ["need", "want", "give"],
   expense_mode: ["UPI", "Credit Card", "Debit Card", "Cash", "Net Banking", "Wallet", "Auto Debit", "Cheque"],
-  med_name: ["Tazloc CT 40"],
+  med_name: ["Tazloc CT 40", "D3", "B12"],
   reminder_category: ["health", "food", "exercise", "sleep", "insurance", "career"],
   reminder_channel: ["app", "telegram"],
 };
@@ -1264,6 +1264,8 @@ function HealthView({ health, dropdownOptions, saving, submitHealthMetric, delet
         <TodaySplitTable
           rows={health}
           getDate={(row) => row.entry_date}
+          getCategory={healthMetricCategory}
+          categoryOrder={healthMetricCategoryOrder}
           renderTable={(rows) => <HealthTable rows={rows} editRow={setEditingHealth} deleteRow={handleDelete} />}
         />
       </Panel>
@@ -1307,6 +1309,7 @@ function MedsView({ meds, dropdownOptions, saving, submitMed, deleteMed }: { med
         <TodaySplitTable
           rows={meds}
           getDate={(row) => row.med_date}
+          getCategory={(row) => row.med_name}
           renderTable={(rows) => <MedTable rows={rows} editRow={setEditingMed} deleteRow={handleDelete} />}
         />
       </Panel>
@@ -1455,6 +1458,7 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
           <TodaySplitTable
             rows={foods}
             getDate={(row) => row.entry_date}
+            getCategory={(row) => row.meal_type}
             renderTable={(rows) => <FoodTable rows={rows} fastingPlan={fastingPlan} editFood={setEditingFood} deleteFood={handleDeleteFood} />}
           />
         </Panel>
@@ -1648,6 +1652,7 @@ function ExerciseView({ rows, dropdownOptions, saving, submitHabit, deleteHabit 
         <TodaySplitTable
           rows={rows}
           getDate={(row) => row.entry_date}
+          getCategory={(row) => row.name}
           renderTable={(rows) => <HabitTable rows={rows} editRow={setEditingHabit} deleteRow={handleDelete} />}
         />
       </Panel>
@@ -1750,6 +1755,7 @@ function HabitView({ title, category, rows, saving, submitHabit, deleteHabit, pr
         <TodaySplitTable
           rows={rows}
           getDate={(row) => row.entry_date}
+          getCategory={(row) => row.name}
           renderTable={(rows) => <HabitTable rows={rows} editRow={setEditingHabit} deleteRow={handleDelete} />}
         />
       </Panel>
@@ -1804,6 +1810,7 @@ function ExpenseTrackerView({ expenses, dropdownOptions, saving, submitExpense, 
           <TodaySplitTable
             rows={expenses}
             getDate={(row) => row.expense_date}
+            getCategory={(row) => row.expense_type}
             renderTable={(rows) => <ExpenseTable rows={rows} editRow={setEditingExpense} deleteRow={handleDelete} />}
           />
         </Panel>
@@ -1852,6 +1859,7 @@ function ReminderView({ reminders, dropdownOptions, saving, submitReminder, dele
         <TodaySplitTable
           rows={reminders}
           getDate={(row) => row.due_date}
+          getCategory={(row) => row.category}
           renderTable={(rows) => <ReminderTable rows={rows} editRow={setEditingReminder} deleteRow={handleDelete} />}
         />
       </Panel>
@@ -2608,6 +2616,22 @@ function MedTable({ rows, editRow, deleteRow }: { rows: MedLog[]; editRow: (row:
   ])} />;
 }
 
+const healthMetricCategoryOrder = ["Body Metrics", "Sugar", "BP", "Shite", "Other"];
+
+function healthMetricCategory(row: HealthMetric) {
+  if ([row.weight_kg, row.body_fat_percent, row.muscle_percent, row.visceral_fat, row.body_age, row.bmr].some(hasMetricValue)) {
+    return "Body Metrics";
+  }
+  if (hasMetricValue(row.blood_sugar)) return "Sugar";
+  if (hasMetricValue(row.systolic_bp) || hasMetricValue(row.diastolic_bp)) return "BP";
+  if (hasMetricValue(row.shite_count)) return "Shite";
+  return "Other";
+}
+
+function hasMetricValue(value: unknown) {
+  return value !== null && value !== undefined;
+}
+
 function setFoodFlagCheckboxes(form: HTMLFormElement, riskFlags: string[]) {
   const flags = new Set(riskFlags);
   setCheckboxValue(form, "direct_sugar", ["sweets", "fruit_juice", "sugary_tea_coffee"].some((flag) => flags.has(flag)));
@@ -2645,10 +2669,19 @@ function ReminderTable({ rows, editRow, deleteRow }: { rows: Reminder[]; editRow
   ])} />;
 }
 
-function TodaySplitTable<T>({ rows, getDate, renderTable }: { rows: T[]; getDate: (row: T) => string | null | undefined; renderTable: (rows: T[]) => React.ReactNode }) {
+type TodaySplitTableProps<T> = {
+  rows: T[];
+  getDate: (row: T) => string | null | undefined;
+  renderTable: (rows: T[]) => React.ReactNode;
+  getCategory?: (row: T) => string | null | undefined;
+  categoryOrder?: string[];
+};
+
+function TodaySplitTable<T>({ rows, getDate, renderTable, getCategory, categoryOrder = [] }: TodaySplitTableProps<T>) {
   const today = isoDate();
   const todayRows = rows.filter((row) => getDate(row) === today);
   const otherRows = rows.filter((row) => getDate(row) !== today);
+  const otherGroups = getCategory && otherRows.length ? groupRowsByCategory(otherRows, getCategory, categoryOrder) : [];
 
   return (
     <div className="split-log-section section">
@@ -2658,10 +2691,43 @@ function TodaySplitTable<T>({ rows, getDate, renderTable }: { rows: T[]; getDate
       </div>
       <div>
         <h3>Earlier</h3>
-        {renderTable(otherRows)}
+        {otherGroups.length ? (
+          <div className="log-category-groups">
+            {otherGroups.map((group) => (
+              <div className="log-category-group" key={group.label}>
+                <h4>{group.label}</h4>
+                {renderTable(group.rows)}
+              </div>
+            ))}
+          </div>
+        ) : renderTable(otherRows)}
       </div>
     </div>
   );
+}
+
+function groupRowsByCategory<T>(rows: T[], getCategory: (row: T) => string | null | undefined, categoryOrder: string[]) {
+  const groups = new Map<string, T[]>();
+  for (const row of rows) {
+    const label = formatCategoryLabel(getCategory(row));
+    groups.set(label, [...(groups.get(label) ?? []), row]);
+  }
+
+  const order = new Map(categoryOrder.map((category, index) => [category, index]));
+  return Array.from(groups.entries())
+    .sort(([left], [right]) => {
+      const leftOrder = order.get(left) ?? Number.MAX_SAFE_INTEGER;
+      const rightOrder = order.get(right) ?? Number.MAX_SAFE_INTEGER;
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+      return left.localeCompare(right);
+    })
+    .map(([label, groupRows]) => ({ label, rows: groupRows }));
+}
+
+function formatCategoryLabel(value: string | null | undefined) {
+  const label = value?.trim();
+  if (!label) return "Other";
+  return label.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function Table({ headers, rows, className = "" }: { headers: string[]; rows: React.ReactNode[][]; className?: string }) {

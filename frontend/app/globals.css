@@ -209,8 +209,10 @@ h3 {
 }
 
 .button.mini {
-  min-height: 39px;
-  padding: 8px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  min-height: 30px;
+  padding: 5px 8px;
   white-space: nowrap;
 }
 
@@ -522,15 +524,15 @@ th {
 }
 
 .table-action {
-  display: flex;
-  gap: 8px;
-  min-width: 76px;
+  min-width: 0;
+  padding-left: 8px;
+  padding-right: 8px;
   white-space: nowrap;
-  width: 1%;
+  width: 48px;
 }
 
 .table-action .button {
-  min-width: 68px;
+  min-width: 48px;
 }
 
 .dropdown-add-form .form-grid {
@@ -555,6 +557,27 @@ th {
 
 .split-log-section .table-wrap {
   margin-top: 10px;
+}
+
+.log-category-groups {
+  display: grid;
+  gap: 16px;
+  margin-top: 10px;
+}
+
+.log-category-group {
+  display: grid;
+  gap: 8px;
+}
+
+.log-category-group h4 {
+  color: var(--ink);
+  font-size: 14px;
+  margin: 0;
+}
+
+.log-category-group .table-wrap {
+  margin-top: 0;
 }
 
 .trend-grid {
