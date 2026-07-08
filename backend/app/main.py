@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import secrets
+from calendar import monthrange
 from datetime import date, datetime, timedelta
 from typing import TypeVar
 
@@ -132,10 +133,16 @@ DEFAULT_DROPDOWN_OPTIONS = {
     ],
     "expense_category": ["need", "want", "give"],
     "expense_mode": ["UPI", "Credit Card", "Debit Card", "Cash", "Net Banking", "Wallet", "Auto Debit", "Cheque"],
-    "med_name": ["Tazloc CT 40"],
+    "med_name": ["Tazloc CT 40", "D3", "B12"],
     "reminder_category": ["health", "food", "exercise", "sleep", "insurance", "career"],
     "reminder_channel": ["app", "telegram"],
 }
+SUPPLEMENT_REMINDER_CATEGORY = "health"
+SUPPLEMENT_REMINDER_CHANNEL = "app"
+D3_MED_NAMES = {"D3"}
+B12_MED_NAMES = {"B12", "Renerve Injection 100mg"}
+D3_REMINDER_TITLE = "Take D3"
+B12_REMINDER_TITLE = "Take B12 injection"
 
 DEFAULT_CORS_ORIGINS = [
     "http://localhost:3000",
@@ -169,6 +176,7 @@ def startup() -> None:
         ensure_user(db)
         ensure_all_enabled_modules(db)
         ensure_dropdown_options(db)
+        ensure_supplement_reminders(db)
         db.commit()
 
 
@@ -324,6 +332,119 @@ def ensure_dropdown_options(db: Session) -> None:
                     sort_order=index,
                 )
             )
+
+
+def ensure_supplement_reminders(db: Session) -> None:
+    for profile in db.query(UserProfile).all():
+        sync_supplement_reminders(db, profile.id)
+
+
+def sync_supplement_reminders(db: Session, user_id: int) -> None:
+    today = date.today()
+    latest_d3 = latest_med_date(db, user_id, D3_MED_NAMES)
+    latest_b12 = latest_med_date(db, user_id, B12_MED_NAMES)
+
+    if latest_d3 or supplement_reminder_exists(db, user_id, D3_REMINDER_TITLE):
+        d3_due_date = next_weekly_due_date(latest_d3, today)
+        upsert_supplement_reminder(
+            db,
+            user_id=user_id,
+            title=D3_REMINDER_TITLE,
+            due_date=d3_due_date,
+            cadence="weekly on Saturday",
+            notes="Take D3 every Saturday. Log a D3 med entry after taking it so the next reminder moves forward.",
+            today=today,
+        )
+
+    if latest_b12:
+        b12_due_date = add_months(latest_b12, 2)
+        upsert_supplement_reminder(
+            db,
+            user_id=user_id,
+            title=B12_REMINDER_TITLE,
+            due_date=b12_due_date,
+            cadence="every 2 months from last injection",
+            notes=f"Last B12 injection logged on {latest_b12.isoformat()}. Log each B12 injection so this due date stays accurate.",
+            today=today,
+        )
+
+
+def latest_med_date(db: Session, user_id: int, med_names: set[str]) -> date | None:
+    row = (
+        user_query(db, MedLog, user_id)
+        .filter(MedLog.med_name.in_(med_names))
+        .order_by(desc(MedLog.med_date), desc(MedLog.created_at))
+        .first()
+    )
+    return row.med_date if row else None
+
+
+def supplement_reminder_exists(db: Session, user_id: int, title: str) -> bool:
+    return user_query(db, Reminder, user_id).filter(Reminder.title == title).first() is not None
+
+
+def next_weekly_due_date(latest_taken: date | None, today: date) -> date:
+    if not latest_taken:
+        return next_saturday_on_or_after(today)
+    due_date = next_saturday_after(latest_taken)
+    while due_date < today:
+        due_date += timedelta(days=7)
+    return due_date
+
+
+def next_saturday_on_or_after(value: date) -> date:
+    return value + timedelta(days=(5 - value.weekday()) % 7)
+
+
+def next_saturday_after(value: date) -> date:
+    days_until_saturday = (5 - value.weekday()) % 7
+    if days_until_saturday == 0:
+        days_until_saturday = 7
+    return value + timedelta(days=days_until_saturday)
+
+
+def add_months(value: date, months: int) -> date:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(value.day, monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def upsert_supplement_reminder(
+    db: Session,
+    *,
+    user_id: int,
+    title: str,
+    due_date: date,
+    cadence: str,
+    notes: str,
+    today: date,
+) -> None:
+    reminder = user_query(db, Reminder, user_id).filter(Reminder.title == title).first()
+    if not reminder:
+        db.add(
+            Reminder(
+                user_id=user_id,
+                title=title,
+                category=SUPPLEMENT_REMINDER_CATEGORY,
+                due_date=due_date,
+                cadence=cadence,
+                channel=SUPPLEMENT_REMINDER_CHANNEL,
+                completed=False,
+                notes=notes,
+            )
+        )
+        return
+
+    due_changed = reminder.due_date != due_date
+    reminder.category = SUPPLEMENT_REMINDER_CATEGORY
+    reminder.due_date = due_date
+    reminder.cadence = cadence
+    reminder.channel = SUPPLEMENT_REMINDER_CHANNEL
+    reminder.notes = notes
+    if due_changed or due_date <= today:
+        reminder.completed = False
 
 
 def get_user(db: Session, user_id: int = DEFAULT_USER_ID) -> UserProfile:
@@ -721,9 +842,12 @@ def update_user_profile(
     if auth_user.id != user_id and auth_user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot edit another user")
     profile = get_user(db, user_id)
+    not_nullable_string_fields = {"name", "bp_medication", "coaching_tone", "fasting_plan", "enabled_modules"}
     for key, value in payload.model_dump(exclude_unset=True).items():
         if key == "role" and auth_user.role != "admin":
             continue
+        if value is None and key in not_nullable_string_fields:
+            value = ""
         setattr(profile, key, value)
     db.commit()
     db.refresh(profile)
@@ -1051,6 +1175,8 @@ def create_med(payload: MedLogCreate, user_id: int = Query(DEFAULT_USER_ID), db:
     get_user(db, user_id)
     item = MedLog(**with_user(payload.model_dump(), user_id))
     db.add(item)
+    db.flush()
+    sync_supplement_reminders(db, user_id)
     db.commit()
     db.refresh(item)
     return item
@@ -1070,6 +1196,8 @@ def update_med(
 ) -> MedLog:
     item = get_owned_item(db, MedLog, user_id, med_id, "Med log")
     apply_payload(item, payload.model_dump())
+    db.flush()
+    sync_supplement_reminders(db, user_id)
     db.commit()
     db.refresh(item)
     return item
@@ -1079,6 +1207,8 @@ def update_med(
 def delete_med(med_id: int, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> None:
     item = get_owned_item(db, MedLog, user_id, med_id, "Med log")
     db.delete(item)
+    db.flush()
+    sync_supplement_reminders(db, user_id)
     db.commit()
 
 
@@ -1094,6 +1224,9 @@ def create_reminder(payload: ReminderCreate, user_id: int = Query(DEFAULT_USER_I
 
 @app.get("/reminders", response_model=list[ReminderOut])
 def list_reminders(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> list[Reminder]:
+    if db.query(UserProfile).filter(UserProfile.id == user_id).first():
+        sync_supplement_reminders(db, user_id)
+        db.commit()
     return user_query(db, Reminder, user_id).order_by(desc(Reminder.created_at)).limit(100).all()
 
 

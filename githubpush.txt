@@ -1,0 +1,38 @@
+git remote -v
+
+git remote add origin git@github.com:shyamdk/trisama.git
+
+git add .
+git commit -m "Added OCI deployment changes"
+
+
+git push origin main
+
+
+---if you have made changes directly on github (files)
+
+git branch
+git fetch origin
+git status
+
+git pull --rebase origin main
+
+git push origin main
+
+---If you get merge conflicts
+git status
+
+git add .
+git rebase --continue
+
+git push origin main
+
+--- if you dont care what is changed on github and would like to push from client
+git log --oneline --all --graph
+git push --force-with-lease origin main
+
+
+---------------------------- on oracle cloud -----------
+
+ssh opc@144.24.127.216
+sudo dnf install -y git

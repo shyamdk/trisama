@@ -295,6 +295,10 @@ function requiresPostMealWalk(mealType: string | null | undefined) {
   return mealType === "Breakfast" || mealType === "Lunch" || mealType === "Dinner";
 }
 
+function countsForFastingTimer(mealType: string | null | undefined) {
+  return Boolean(mealType) && mealType !== "Fasting" && mealType !== "Drink";
+}
+
 function fastingTimerClearedKey(userId: number) {
   return `${legacyFastingTimerClearedKey}:${userId}`;
 }
@@ -314,7 +318,7 @@ function localTimestamp(entryDate: string | null, entryTime: string | null) {
 function fastingCountdownFromLatestMeal(foods: FoodLog[], plan: string, clearedAt: number, userId: number): FastingCountdown | null {
   const now = Date.now();
   const mealRows = foods.filter((row) => {
-    if (!row.meal_type || row.meal_type === "Fasting") return false;
+    if (!countsForFastingTimer(row.meal_type)) return false;
     return localTimestamp(row.entry_date, row.meal_time) <= now + 2 * 60 * 1000;
   });
   if (!mealRows.length) return null;
