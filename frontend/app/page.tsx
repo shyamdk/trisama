@@ -1920,7 +1920,6 @@ function ExpenseTrackerView({ expenses, dropdownOptions, saving, submitExpense, 
           <TodaySplitTable
             rows={expenses}
             getDate={(row) => row.expense_date}
-            getCategory={(row) => row.expense_type}
             renderTable={(rows) => <ExpenseTable rows={rows} editRow={setEditingExpense} deleteRow={handleDelete} />}
           />
         </Panel>
