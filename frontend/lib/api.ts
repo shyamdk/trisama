@@ -195,6 +195,59 @@ export type Reminder = {
   notes: string | null;
 };
 
+export type TradeJournalEntry = {
+  id: number;
+  user_id: number;
+  entry_date: string;
+  trade_type: string;
+  outcome: string;
+  amount: number;
+  how_i_felt: string | null;
+  what_happened: string | null;
+  lessons_learnt: string | null;
+  comments: string | null;
+  created_at: string;
+};
+
+export type TradeLessonsInsight = {
+  lessons: string[];
+  source_count: number;
+  ai_generated: boolean;
+};
+
+export type TodoTask = {
+  id: number;
+  user_id: number;
+  parent_task_id: number | null;
+  recurring_task_id: number | null;
+  task: string;
+  task_start: string | null;
+  task_due: string | null;
+  task_type: string;
+  task_category: string;
+  task_group: string;
+  task_status: string;
+  task_comments: string | null;
+  created_at: string;
+};
+
+export type RecurringTask = {
+  id: number;
+  user_id: number;
+  task: string;
+  task_due: string | null;
+  task_type: string;
+  task_category: string;
+  task_group: string;
+  task_status: string;
+  task_comments: string | null;
+  frequency: string;
+  day_of_week: string | null;
+  day_of_month: number | null;
+  month_of_year: number | null;
+  created_at: string;
+};
+
 export type DropdownOption = {
   id: number;
   dropdown_key: string;

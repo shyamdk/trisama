@@ -211,6 +211,56 @@ class Challenge(Base, TimestampMixin):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class TradeJournalEntry(Base, TimestampMixin):
+    __tablename__ = "trade_journal_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    entry_date: Mapped[date] = mapped_column(Date, index=True)
+    trade_type: Mapped[str] = mapped_column(String(40), index=True)
+    outcome: Mapped[str] = mapped_column(String(20), index=True)
+    amount: Mapped[float] = mapped_column(Float, default=0)
+    how_i_felt: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    what_happened: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lessons_learnt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    comments: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class TodoTask(Base, TimestampMixin):
+    __tablename__ = "todo_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    parent_task_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    recurring_task_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    task: Mapped[str] = mapped_column(String(240))
+    task_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    task_due: Mapped[date | None] = mapped_column(Date, nullable=True)
+    task_type: Mapped[str] = mapped_column(String(40), index=True)
+    task_category: Mapped[str] = mapped_column(String(40), index=True)
+    task_group: Mapped[str] = mapped_column(String(40), index=True)
+    task_status: Mapped[str] = mapped_column(String(40), default="Open", index=True)
+    task_comments: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class RecurringTask(Base, TimestampMixin):
+    __tablename__ = "recurring_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    task: Mapped[str] = mapped_column(String(240))
+    task_due: Mapped[date | None] = mapped_column(Date, nullable=True)
+    task_type: Mapped[str] = mapped_column(String(40), index=True)
+    task_category: Mapped[str] = mapped_column(String(40), index=True)
+    task_group: Mapped[str] = mapped_column(String(40), index=True)
+    task_status: Mapped[str] = mapped_column(String(40), default="Open", index=True)
+    task_comments: Mapped[str | None] = mapped_column(Text, nullable=True)
+    frequency: Mapped[str] = mapped_column(String(20), index=True)
+    day_of_week: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    day_of_month: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    month_of_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
 class AuthSession(Base):
     __tablename__ = "auth_sessions"
 

@@ -6,6 +6,8 @@ from calendar import monthrange
 from datetime import date, datetime, timedelta
 from typing import TypeVar
 
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import desc
@@ -13,7 +15,9 @@ from sqlalchemy.orm import Session
 
 from .database import Base, SessionLocal, engine, get_db
 from .food_ai import apply_food_enrichment, enrich_food_log, food_analysis_for_form
-from .models import AuthSession, Challenge, DailyCheckIn, DailyChecklistItem, DropdownOption, ExpenseLog, FinanceSnapshot, FoodLog, HabitLog, HealthMetric, MedLog, Reminder, UserProfile
+from .models import AuthSession, Challenge, DailyCheckIn, DailyChecklistItem, DropdownOption, ExpenseLog, FinanceSnapshot, FoodLog, HabitLog, HealthMetric, MedLog, RecurringTask, Reminder, TodoTask, TradeJournalEntry, UserProfile
+from .telegram_notify import send_telegram_message
+from .trade_ai import distill_trade_lessons
 from .schemas import (
     AdminPasswordResetRequest,
     AdminUserCreate,
@@ -50,7 +54,14 @@ from .schemas import (
     ReminderCreate,
     ReminderOut,
     ReportOut,
+    RecurringTaskCreate,
+    RecurringTaskOut,
     ResetPasswordRequest,
+    TodoTaskCreate,
+    TodoTaskOut,
+    TradeJournalEntryCreate,
+    TradeJournalEntryOut,
+    TradeLessonsInsightOut,
     UserProfileOut,
     UserProfileUpdate,
 )
@@ -58,15 +69,17 @@ from .scoring import build_coach_brief, calculate_category_scores, calculate_lif
 
 
 app = FastAPI(title="PLOS API", version="0.1.0")
+scheduler = BackgroundScheduler()
+CRITICAL_TASK_CATEGORY = "Critical"
 DEFAULT_USER_ID = 1
 DEFAULT_ADMIN_EMAIL = os.getenv("PLOS_DEFAULT_ADMIN_EMAIL")
 DEFAULT_ADMIN_PASSWORD = os.getenv("PLOS_DEFAULT_ADMIN_PASSWORD")
 SESSION_DAYS = 7
-DEFAULT_ENABLED_MODULE_KEYS = ["health", "food", "exercise", "sleep", "career", "bad_habits", "reminders", "journal", "expense_tracker", "meds"]
-NEW_MODULE_KEYS = {"journal", "expense_tracker", "meds"}
+DEFAULT_ENABLED_MODULE_KEYS = ["health", "food", "exercise", "sleep", "career", "bad_habits", "reminders", "journal", "expense_tracker", "meds", "trade_journal", "todo"]
+NEW_MODULE_KEYS = {"journal", "expense_tracker", "meds", "trade_journal", "todo"}
 REMOVED_MODULE_KEYS = {"social", "finance"}
 DEFAULT_ENABLED_MODULES = json.dumps(DEFAULT_ENABLED_MODULE_KEYS)
-UserOwnedModel = TypeVar("UserOwnedModel", DailyCheckIn, DailyChecklistItem, HealthMetric, HabitLog, FoodLog, FinanceSnapshot, ExpenseLog, MedLog, Reminder, Challenge)
+UserOwnedModel = TypeVar("UserOwnedModel", DailyCheckIn, DailyChecklistItem, HealthMetric, HabitLog, FoodLog, FinanceSnapshot, ExpenseLog, MedLog, Reminder, Challenge, TradeJournalEntry, TodoTask, RecurringTask)
 DEFAULT_DAILY_CHECKLIST = [
     ("body_metrics", "Weight / body metrics"),
     ("bp", "BP check-in"),
@@ -133,6 +146,14 @@ DEFAULT_DROPDOWN_OPTIONS = {
     ],
     "expense_category": ["need", "want", "give"],
     "expense_mode": ["UPI", "Credit Card", "Debit Card", "Cash", "Net Banking", "Wallet", "Auto Debit", "Cheque"],
+    "trade_type": ["options", "equity"],
+    "trade_outcome": ["profit", "loss"],
+    "trade_feeling": ["Jittery and Tensed", "Relaxed"],
+    "task_type": ["Personal", "Official"],
+    "task_category": ["Urgent", "Important", "Critical"],
+    "task_group": ["Operational", "Strategic", "Finance", "Certification"],
+    "task_status": ["Open", "Cancelled", "Completed", "Not_Needed"],
+    "task_frequency": ["daily", "weekly", "monthly", "yearly"],
     "med_name": ["Tazloc CT 40", "D3", "B12"],
     "reminder_category": ["health", "food", "exercise", "sleep", "insurance", "career"],
     "reminder_channel": ["app", "telegram"],
@@ -177,7 +198,43 @@ def startup() -> None:
         ensure_all_enabled_modules(db)
         ensure_dropdown_options(db)
         ensure_supplement_reminders(db)
+        ensure_recurring_tasks_synced(db)
         db.commit()
+    if not scheduler.running:
+        scheduler.add_job(
+            run_critical_task_reminders_job,
+            CronTrigger(hour="7-19", minute=0),
+            id="critical_task_reminders",
+            replace_existing=True,
+        )
+        scheduler.start()
+
+
+@app.on_event("shutdown")
+def shutdown() -> None:
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
+
+
+def run_critical_task_reminders_job() -> None:
+    with SessionLocal() as db:
+        send_critical_task_reminders(db)
+
+
+def send_critical_task_reminders(db: Session) -> None:
+    tasks = (
+        db.query(TodoTask)
+        .filter(TodoTask.task_category == CRITICAL_TASK_CATEGORY, TodoTask.task_status == "Open")
+        .order_by(TodoTask.task_due.is_(None), TodoTask.task_due)
+        .all()
+    )
+    if not tasks:
+        return
+    lines = ["Critical open tasks:"]
+    for task in tasks:
+        due = f" (due {task.task_due})" if task.task_due else ""
+        lines.append(f"- {task.task}{due}")
+    send_telegram_message("\n".join(lines))
 
 
 def ensure_user(db: Session) -> UserProfile:
@@ -308,6 +365,22 @@ def ensure_user_columns(db: Session) -> None:
     if "habit_time" not in habit_columns:
         db.connection().exec_driver_sql("ALTER TABLE habit_logs ADD COLUMN habit_time TIME")
 
+    trade_journal_columns = {row[1] for row in db.connection().exec_driver_sql("PRAGMA table_info(trade_journal_entries)")}
+    if "how_i_felt" not in trade_journal_columns:
+        db.connection().exec_driver_sql("ALTER TABLE trade_journal_entries ADD COLUMN how_i_felt VARCHAR(80)")
+
+    todo_task_columns = {row[1] for row in db.connection().exec_driver_sql("PRAGMA table_info(todo_tasks)")}
+    if "recurring_task_id" not in todo_task_columns:
+        db.connection().exec_driver_sql("ALTER TABLE todo_tasks ADD COLUMN recurring_task_id INTEGER")
+
+    recurring_task_columns = {row[1] for row in db.connection().exec_driver_sql("PRAGMA table_info(recurring_tasks)")}
+    if "day_of_week" not in recurring_task_columns:
+        db.connection().exec_driver_sql("ALTER TABLE recurring_tasks ADD COLUMN day_of_week VARCHAR(20)")
+    if "day_of_month" not in recurring_task_columns:
+        db.connection().exec_driver_sql("ALTER TABLE recurring_tasks ADD COLUMN day_of_month INTEGER")
+    if "month_of_year" not in recurring_task_columns:
+        db.connection().exec_driver_sql("ALTER TABLE recurring_tasks ADD COLUMN month_of_year INTEGER")
+
     db.connection().exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_expense_logs_user_id ON expense_logs (user_id)")
     db.connection().exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_expense_logs_expense_date ON expense_logs (expense_date)")
     db.connection().exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_med_logs_user_id ON med_logs (user_id)")
@@ -409,6 +482,92 @@ def add_months(value: date, months: int) -> date:
     month = month_index % 12 + 1
     day = min(value.day, monthrange(year, month)[1])
     return date(year, month, day)
+
+
+def advance_recurring_due_date(value: date, frequency: str) -> date:
+    if frequency == "daily":
+        return value + timedelta(days=1)
+    if frequency == "weekly":
+        return value + timedelta(days=7)
+    if frequency == "yearly":
+        return add_months(value, 12)
+    return add_months(value, 1)
+
+
+WEEKDAY_INDEX = {
+    "Monday": 0,
+    "Tuesday": 1,
+    "Wednesday": 2,
+    "Thursday": 3,
+    "Friday": 4,
+    "Saturday": 5,
+    "Sunday": 6,
+}
+
+
+def compute_recurring_due_date(
+    frequency: str,
+    day_of_week: str | None,
+    day_of_month: int | None,
+    month_of_year: int | None,
+    today: date,
+) -> date:
+    if frequency == "weekly":
+        target_weekday = WEEKDAY_INDEX.get(day_of_week or "Monday", 0)
+        days_ahead = (target_weekday - today.weekday()) % 7
+        return today + timedelta(days=days_ahead)
+    if frequency == "monthly":
+        day = max(1, min(day_of_month or 1, 31))
+        candidate = date(today.year, today.month, min(day, monthrange(today.year, today.month)[1]))
+        if candidate < today:
+            candidate = add_months(candidate, 1)
+        return candidate
+    if frequency == "yearly":
+        month = month_of_year or 1
+        day = max(1, min(day_of_month or 1, 31))
+        candidate = date(today.year, month, min(day, monthrange(today.year, month)[1]))
+        if candidate < today:
+            candidate = date(today.year + 1, month, min(day, monthrange(today.year + 1, month)[1]))
+        return candidate
+    return today
+
+
+def ensure_recurring_tasks_synced(db: Session) -> None:
+    for profile in db.query(UserProfile).all():
+        sync_recurring_tasks(db, profile.id)
+
+
+def sync_recurring_tasks(db: Session, user_id: int) -> None:
+    today = date.today()
+    templates = (
+        user_query(db, RecurringTask, user_id)
+        .filter(RecurringTask.task_status == "Open")
+        .all()
+    )
+    for template in templates:
+        iterations = 0
+        while template.task_due and template.task_due <= today and iterations < 366:
+            iterations += 1
+            already_generated = (
+                user_query(db, TodoTask, user_id)
+                .filter(TodoTask.recurring_task_id == template.id, TodoTask.task_due == template.task_due)
+                .first()
+            )
+            if not already_generated:
+                db.add(
+                    TodoTask(
+                        user_id=user_id,
+                        recurring_task_id=template.id,
+                        task=template.task,
+                        task_due=template.task_due,
+                        task_type=template.task_type,
+                        task_category=template.task_category,
+                        task_group=template.task_group,
+                        task_status="Open",
+                        task_comments=template.task_comments,
+                    )
+                )
+            template.task_due = advance_recurring_due_date(template.task_due, template.frequency)
 
 
 def upsert_supplement_reminder(
@@ -1295,6 +1454,148 @@ def update_challenge(
 @app.delete("/challenges/{challenge_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_challenge(challenge_id: int, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> None:
     item = get_owned_item(db, Challenge, user_id, challenge_id, "Challenge")
+    db.delete(item)
+    db.commit()
+
+
+@app.post("/trade-journal", response_model=TradeJournalEntryOut)
+def create_trade_journal_entry(
+    payload: TradeJournalEntryCreate, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)
+) -> TradeJournalEntry:
+    get_user(db, user_id)
+    item = TradeJournalEntry(**with_user(payload.model_dump(), user_id))
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.get("/trade-journal", response_model=list[TradeJournalEntryOut])
+def list_trade_journal_entries(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> list[TradeJournalEntry]:
+    return user_query(db, TradeJournalEntry, user_id).order_by(desc(TradeJournalEntry.entry_date), desc(TradeJournalEntry.created_at)).limit(200).all()
+
+
+@app.patch("/trade-journal/{entry_id}", response_model=TradeJournalEntryOut)
+def update_trade_journal_entry(
+    entry_id: int,
+    payload: TradeJournalEntryCreate,
+    user_id: int = Query(DEFAULT_USER_ID),
+    db: Session = Depends(get_db),
+) -> TradeJournalEntry:
+    item = get_owned_item(db, TradeJournalEntry, user_id, entry_id, "Trade journal entry")
+    apply_payload(item, payload.model_dump())
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.delete("/trade-journal/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_trade_journal_entry(entry_id: int, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> None:
+    item = get_owned_item(db, TradeJournalEntry, user_id, entry_id, "Trade journal entry")
+    db.delete(item)
+    db.commit()
+
+
+@app.get("/trade-journal/insights", response_model=TradeLessonsInsightOut)
+def get_trade_lessons_insight(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> dict:
+    entries = (
+        user_query(db, TradeJournalEntry, user_id)
+        .order_by(desc(TradeJournalEntry.entry_date))
+        .limit(100)
+        .all()
+    )
+    lessons = [entry.lessons_learnt.strip() for entry in entries if entry.lessons_learnt and entry.lessons_learnt.strip()]
+    distilled = distill_trade_lessons(lessons)
+    if distilled:
+        return {"lessons": distilled, "source_count": len(lessons), "ai_generated": True}
+    return {"lessons": lessons[:8], "source_count": len(lessons), "ai_generated": False}
+
+
+@app.post("/todo-tasks", response_model=TodoTaskOut)
+def create_todo_task(payload: TodoTaskCreate, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> TodoTask:
+    get_user(db, user_id)
+    item = TodoTask(**with_user(payload.model_dump(), user_id))
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.get("/todo-tasks", response_model=list[TodoTaskOut])
+def list_todo_tasks(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> list[TodoTask]:
+    if db.query(UserProfile).filter(UserProfile.id == user_id).first():
+        sync_recurring_tasks(db, user_id)
+        db.commit()
+    return user_query(db, TodoTask, user_id).order_by(TodoTask.task_due.is_(None), TodoTask.task_due, desc(TodoTask.created_at)).limit(500).all()
+
+
+@app.patch("/todo-tasks/{task_id}", response_model=TodoTaskOut)
+def update_todo_task(
+    task_id: int,
+    payload: TodoTaskCreate,
+    user_id: int = Query(DEFAULT_USER_ID),
+    db: Session = Depends(get_db),
+) -> TodoTask:
+    item = get_owned_item(db, TodoTask, user_id, task_id, "Task")
+    apply_payload(item, payload.model_dump())
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.delete("/todo-tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_todo_task(task_id: int, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> None:
+    item = get_owned_item(db, TodoTask, user_id, task_id, "Task")
+    db.delete(item)
+    db.commit()
+
+
+RECURRING_SCHEDULE_FIELDS = ("frequency", "day_of_week", "day_of_month", "month_of_year")
+
+
+@app.post("/recurring-tasks", response_model=RecurringTaskOut)
+def create_recurring_task(payload: RecurringTaskCreate, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> RecurringTask:
+    get_user(db, user_id)
+    item = RecurringTask(**with_user(payload.model_dump(), user_id))
+    item.task_due = compute_recurring_due_date(item.frequency, item.day_of_week, item.day_of_month, item.month_of_year, date.today())
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    sync_recurring_tasks(db, user_id)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.get("/recurring-tasks", response_model=list[RecurringTaskOut])
+def list_recurring_tasks(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> list[RecurringTask]:
+    return user_query(db, RecurringTask, user_id).order_by(desc(RecurringTask.created_at)).limit(200).all()
+
+
+@app.patch("/recurring-tasks/{task_id}", response_model=RecurringTaskOut)
+def update_recurring_task(
+    task_id: int,
+    payload: RecurringTaskCreate,
+    user_id: int = Query(DEFAULT_USER_ID),
+    db: Session = Depends(get_db),
+) -> RecurringTask:
+    item = get_owned_item(db, RecurringTask, user_id, task_id, "Recurring task")
+    new_data = payload.model_dump()
+    schedule_changed = any(getattr(item, field) != new_data.get(field) for field in RECURRING_SCHEDULE_FIELDS)
+    apply_payload(item, new_data)
+    if schedule_changed or item.task_due is None:
+        item.task_due = compute_recurring_due_date(item.frequency, item.day_of_week, item.day_of_month, item.month_of_year, date.today())
+    db.commit()
+    db.refresh(item)
+    sync_recurring_tasks(db, user_id)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.delete("/recurring-tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_recurring_task(task_id: int, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> None:
+    item = get_owned_item(db, RecurringTask, user_id, task_id, "Recurring task")
     db.delete(item)
     db.commit()
 

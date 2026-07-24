@@ -13,8 +13,12 @@ import {
   HealthMetric,
   LoginResponse,
   MedLog,
+  RecurringTask,
   Reminder,
   Report,
+  TodoTask,
+  TradeJournalEntry,
+  TradeLessonsInsight,
   UserProfile,
   apiGet,
   apiGetAuth,
@@ -27,7 +31,7 @@ import {
   userPath,
 } from "@/lib/api";
 
-const baseTabs = ["Dashboard", "Profile", "Journal", "Health", "Meds", "Food", "Exercise", "Sleep", "Career", "Bad Habits", "Expense Tracker", "Reminders", "Reports"];
+const baseTabs = ["Dashboard", "Profile", "Journal", "Health", "Meds", "Food", "Exercise", "Sleep", "Career", "Bad Habits", "Expense Tracker", "T-Journal", "To-Do", "Reminders", "Reports"];
 const legacyFastingTimerStorageKey = "plos_fasting_countdown";
 const legacyFastingTimerClearedKey = "plos_fasting_countdown_cleared_at";
 const expiredFastingPromptMs = 12 * 60 * 60 * 1000;
@@ -44,6 +48,8 @@ const moduleOptions = [
   { key: "expense_tracker", label: "Expense Tracker" },
   { key: "reminders", label: "Reminders" },
   { key: "journal", label: "Journal" },
+  { key: "trade_journal", label: "Trade Journal" },
+  { key: "todo", label: "To-Do" },
 ];
 const tabModule: Record<string, string | null> = {
   Dashboard: null,
@@ -57,6 +63,8 @@ const tabModule: Record<string, string | null> = {
   Career: "career",
   "Bad Habits": "bad_habits",
   "Expense Tracker": "expense_tracker",
+  "T-Journal": "trade_journal",
+  "To-Do": "todo",
   Reminders: "reminders",
   Reports: null,
   Admin: null,
@@ -119,6 +127,14 @@ const defaultDropdownOptions: Record<string, string[]> = {
   med_name: ["Tazloc CT 40", "D3", "B12"],
   reminder_category: ["health", "food", "exercise", "sleep", "insurance", "career"],
   reminder_channel: ["app", "telegram"],
+  trade_type: ["options", "equity"],
+  trade_outcome: ["profit", "loss"],
+  trade_feeling: ["Jittery and Tensed", "Relaxed"],
+  task_type: ["Personal", "Official"],
+  task_category: ["Urgent", "Important", "Critical"],
+  task_group: ["Operational", "Strategic", "Finance", "Certification"],
+  task_status: ["Open", "Cancelled", "Completed", "Not_Needed"],
+  task_frequency: ["daily", "weekly", "monthly", "yearly"],
 };
 const dropdownLabels: Record<string, string> = {
   role: "Role",
@@ -138,6 +154,14 @@ const dropdownLabels: Record<string, string> = {
   med_name: "Medicine",
   reminder_category: "Reminder category",
   reminder_channel: "Reminder channel",
+  trade_type: "Trade type",
+  trade_outcome: "Trade outcome",
+  trade_feeling: "How I felt",
+  task_type: "Task type",
+  task_category: "Task category",
+  task_group: "Task group",
+  task_status: "Task status",
+  task_frequency: "Task frequency",
 };
 
 type FastingCountdown = {
@@ -399,6 +423,10 @@ export default function Home() {
   const [habits, setHabits] = useState<HabitLog[]>([]);
   const [foods, setFoods] = useState<FoodLog[]>([]);
   const [expenses, setExpenses] = useState<ExpenseLog[]>([]);
+  const [tradeJournalEntries, setTradeJournalEntries] = useState<TradeJournalEntry[]>([]);
+  const [tradeLessonsInsight, setTradeLessonsInsight] = useState<TradeLessonsInsight | null>(null);
+  const [todoTasks, setTodoTasks] = useState<TodoTask[]>([]);
+  const [recurringTasks, setRecurringTasks] = useState<RecurringTask[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [report, setReport] = useState<Report | null>(null);
   const [dropdownOptions, setDropdownOptions] = useState<DropdownOption[]>([]);
@@ -431,6 +459,10 @@ export default function Home() {
     setHabits([]);
     setFoods([]);
     setExpenses([]);
+    setTradeJournalEntries([]);
+    setTradeLessonsInsight(null);
+    setTodoTasks([]);
+    setRecurringTasks([]);
     setReminders([]);
     setReport(null);
     setAdminUsers([]);
@@ -446,7 +478,7 @@ export default function Home() {
     setLoading(true);
     try {
       const currentUserId = activeUser.id;
-      const [dash, checkinRows, checklistRows, healthRows, medRows, habitRows, foodRows, expenseRows, reminderRows, weeklyReport, userProfile, dropdownRows] = await Promise.all([
+      const [dash, checkinRows, checklistRows, healthRows, medRows, habitRows, foodRows, expenseRows, tradeJournalRows, todoRows, recurringRows, reminderRows, weeklyReport, userProfile, dropdownRows] = await Promise.all([
         apiGet<Dashboard>(userPath("/dashboard", currentUserId)),
         apiGet<DailyCheckIn[]>(userPath("/checkins", currentUserId)),
         apiGet<DailyChecklistItem[]>(userPath(`/daily-checklist?entry_date=${isoDate()}`, currentUserId)),
@@ -455,6 +487,9 @@ export default function Home() {
         apiGet<HabitLog[]>(userPath("/habits", currentUserId)),
         apiGet<FoodLog[]>(userPath("/foods", currentUserId)),
         apiGet<ExpenseLog[]>(userPath("/expenses", currentUserId)),
+        apiGet<TradeJournalEntry[]>(userPath("/trade-journal", currentUserId)),
+        apiGet<TodoTask[]>(userPath("/todo-tasks", currentUserId)),
+        apiGet<RecurringTask[]>(userPath("/recurring-tasks", currentUserId)),
         apiGet<Reminder[]>(userPath("/reminders", currentUserId)),
         apiGet<Report>(userPath("/reports/weekly", currentUserId)),
         apiGet<UserProfile>(`/users/${currentUserId}`),
@@ -468,6 +503,9 @@ export default function Home() {
       setHabits(habitRows);
       setFoods(foodRows);
       setExpenses(expenseRows);
+      setTradeJournalEntries(tradeJournalRows);
+      setTodoTasks(todoRows);
+      setRecurringTasks(recurringRows);
       setReminders(reminderRows);
       setReport(weeklyReport);
       setUser(userProfile);
@@ -696,6 +734,72 @@ export default function Home() {
 
   async function deleteExpense(expenseId: number) {
     return deleteEntry("/expenses", expenseId, "Delete this expense?");
+  }
+
+  async function submitTradeJournal(event: FormEvent<HTMLFormElement>, entryId?: number) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await save("/trade-journal", {
+      entry_date: text(form, "entry_date"),
+      trade_type: text(form, "trade_type"),
+      outcome: text(form, "outcome"),
+      amount: numeric(form, "amount") ?? 0,
+      how_i_felt: text(form, "how_i_felt"),
+      what_happened: text(form, "what_happened"),
+      lessons_learnt: text(form, "lessons_learnt"),
+      comments: text(form, "comments"),
+    }, event.currentTarget, entryId);
+  }
+
+  async function deleteTradeJournal(entryId: number) {
+    return deleteEntry("/trade-journal", entryId, "Delete this trade journal entry?");
+  }
+
+  async function fetchTradeLessonsInsight() {
+    if (!user) return;
+    const insight = await apiGet<TradeLessonsInsight>(userPath("/trade-journal/insights", user.id));
+    setTradeLessonsInsight(insight);
+  }
+
+  async function submitTodoTask(event: FormEvent<HTMLFormElement>, taskId?: number) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await save("/todo-tasks", {
+      parent_task_id: numeric(form, "parent_task_id"),
+      task: text(form, "task") ?? "",
+      task_start: text(form, "task_start"),
+      task_due: text(form, "task_due"),
+      task_type: text(form, "task_type"),
+      task_category: text(form, "task_category"),
+      task_group: text(form, "task_group"),
+      task_status: text(form, "task_status") ?? "Open",
+      task_comments: text(form, "task_comments"),
+    }, event.currentTarget, taskId);
+  }
+
+  async function deleteTodoTask(taskId: number) {
+    return deleteEntry("/todo-tasks", taskId, "Delete this task?");
+  }
+
+  async function submitRecurringTask(event: FormEvent<HTMLFormElement>, taskId?: number) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await save("/recurring-tasks", {
+      task: text(form, "task") ?? "",
+      task_type: text(form, "task_type"),
+      task_category: text(form, "task_category"),
+      task_group: text(form, "task_group"),
+      task_status: text(form, "task_status") ?? "Open",
+      task_comments: text(form, "task_comments"),
+      frequency: text(form, "frequency") ?? "daily",
+      day_of_week: text(form, "day_of_week"),
+      day_of_month: numeric(form, "day_of_month"),
+      month_of_year: numeric(form, "month_of_year"),
+    }, event.currentTarget, taskId);
+  }
+
+  async function deleteRecurringTask(taskId: number) {
+    return deleteEntry("/recurring-tasks", taskId, "Delete this recurring task? Already-generated tasks will not be removed.");
   }
 
   async function submitFood(event: FormEvent<HTMLFormElement>, foodId?: number) {
@@ -951,6 +1055,8 @@ export default function Home() {
       {active === "Career" && <HabitView title="Career & Growth" category="career" rows={[...(habitsByCategory.career ?? []), ...(habitsByCategory.growth ?? [])]} saving={saving} submitHabit={submitHabit} deleteHabit={deleteHabit} presets={dropdownValues(dropdownOptions, "career_name")} />}
       {active === "Bad Habits" && <HabitView title="Bad Habits" category="bad_habit" rows={habitsByCategory.bad_habit ?? []} saving={saving} submitHabit={submitHabit} deleteHabit={deleteHabit} presets={dropdownValues(dropdownOptions, "bad_habit_name")} />}
       {active === "Expense Tracker" && <ExpenseTrackerView expenses={expenses} dropdownOptions={dropdownOptions} saving={saving} submitExpense={submitExpense} deleteExpense={deleteExpense} />}
+      {active === "T-Journal" && <TradeJournalView entries={tradeJournalEntries} insight={tradeLessonsInsight} dropdownOptions={dropdownOptions} saving={saving} submitTradeJournal={submitTradeJournal} deleteTradeJournal={deleteTradeJournal} fetchTradeLessonsInsight={fetchTradeLessonsInsight} />}
+      {active === "To-Do" && <TodoView tasks={todoTasks} recurringTasks={recurringTasks} dropdownOptions={dropdownOptions} saving={saving} submitTodoTask={submitTodoTask} deleteTodoTask={deleteTodoTask} submitRecurringTask={submitRecurringTask} deleteRecurringTask={deleteRecurringTask} />}
       {active === "Reminders" && <ReminderView reminders={reminders} dropdownOptions={dropdownOptions} saving={saving} submitReminder={submitReminder} deleteReminder={deleteReminder} />}
       {active === "Reports" && report && <ReportView report={report} userId={user.id} setReport={setReport} />}
       {active === "Admin" && user.role === "admin" && token && <AdminView users={adminUsers} dropdownOptions={dropdownOptions} token={token} saving={saving} setSaving={setSaving} reload={() => loadAll()} setDropdownOptions={setDropdownOptions} onAuthExpired={expireSession} />}
@@ -1819,6 +1925,424 @@ function ExpenseTrackerView({ expenses, dropdownOptions, saving, submitExpense, 
           />
         </Panel>
       </div>
+    </div>
+  );
+}
+
+function TradeJournalView({ entries, insight, dropdownOptions, saving, submitTradeJournal, deleteTradeJournal, fetchTradeLessonsInsight }: {
+  entries: TradeJournalEntry[];
+  insight: TradeLessonsInsight | null;
+  dropdownOptions: DropdownOption[];
+  saving: boolean;
+  submitTradeJournal: (event: FormEvent<HTMLFormElement>, entryId?: number) => Promise<void>;
+  deleteTradeJournal: (entryId: number) => Promise<boolean>;
+  fetchTradeLessonsInsight: () => Promise<void>;
+}) {
+  const [editingEntry, setEditingEntry] = useState<TradeJournalEntry | null>(null);
+  const [loadingInsight, setLoadingInsight] = useState(false);
+  const tradeTypeOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "trade_type"), editingEntry?.trade_type);
+  const outcomeOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "trade_outcome"), editingEntry?.outcome);
+  const feelingOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "trade_feeling"), editingEntry?.how_i_felt);
+  const netPnl = entries.reduce((sum, row) => sum + (row.outcome === "loss" ? -row.amount : row.amount), 0);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    await submitTradeJournal(event, editingEntry?.id);
+    setEditingEntry(null);
+  }
+
+  async function handleDelete(row: TradeJournalEntry) {
+    const deleted = await deleteTradeJournal(row.id);
+    if (deleted && editingEntry?.id === row.id) {
+      setEditingEntry(null);
+    }
+  }
+
+  async function handleRefreshInsight() {
+    setLoadingInsight(true);
+    try {
+      await fetchTradeLessonsInsight();
+    } finally {
+      setLoadingInsight(false);
+    }
+  }
+
+  return (
+    <div className="stack">
+      <section className="grid metrics">
+        <Metric title="Net P&L" value={`Rs ${Math.round(netPnl)}`} note={`${entries.length} logged trades`} />
+      </section>
+      <Panel title="Distilled Lessons Learnt">
+        <div className="section">
+          <div className="actions">
+            <button className="button secondary" type="button" disabled={loadingInsight} onClick={handleRefreshInsight}>
+              {loadingInsight ? "Distilling..." : "Refresh AI Insights"}
+            </button>
+          </div>
+          {insight && insight.lessons.length > 0 ? (
+            <>
+              <ul>
+                {insight.lessons.map((lesson, index) => <li key={index}>{lesson}</li>)}
+              </ul>
+              <p className="hint">
+                {insight.ai_generated
+                  ? `Distilled by AI from ${insight.source_count} lessons learnt entries.`
+                  : `Showing raw lessons learnt (AI distillation unavailable). ${insight.source_count} entries logged.`}
+              </p>
+            </>
+          ) : (
+            <p className="hint">No lessons learnt yet. Log a trade below, then refresh insights.</p>
+          )}
+        </div>
+      </Panel>
+      <div className="grid two">
+        <Panel title={editingEntry ? "Edit Trade" : "Trade Entry"}>
+          <form className="section" key={editingEntry?.id ?? "new-trade"} onSubmit={handleSubmit}>
+            <div className="form-grid">
+              <label>Date<input name="entry_date" type="date" defaultValue={editingEntry?.entry_date ?? isoDate()} required /></label>
+              <label>Trade type<select name="trade_type" defaultValue={editingEntry?.trade_type ?? tradeTypeOptions[0]} required>{tradeTypeOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+              <label>Outcome<select name="outcome" defaultValue={editingEntry?.outcome ?? outcomeOptions[0]} required>{outcomeOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+              <label>Amount Rs.<input name="amount" type="number" min="0" step="0.01" defaultValue={editingEntry?.amount ?? ""} required /></label>
+              <label>How I felt<select name="how_i_felt" defaultValue={editingEntry?.how_i_felt ?? ""}><option value="">-</option>{feelingOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+            </div>
+            <label>What happened<textarea name="what_happened" defaultValue={editingEntry?.what_happened ?? ""} /></label>
+            <label>Lessons learnt<textarea name="lessons_learnt" defaultValue={editingEntry?.lessons_learnt ?? ""} /></label>
+            <label>Comments<textarea name="comments" defaultValue={editingEntry?.comments ?? ""} /></label>
+            <div className="actions">
+              <button className="button" disabled={saving}>{editingEntry ? "Update Trade" : "Save Trade"}</button>
+              {editingEntry && <button className="button secondary" type="button" disabled={saving} onClick={() => setEditingEntry(null)}>Cancel Edit</button>}
+            </div>
+          </form>
+        </Panel>
+        <Panel title="Trade Log">
+          <TodaySplitTable
+            rows={entries}
+            getDate={(row) => row.entry_date}
+            getCategory={(row) => row.trade_type}
+            renderTable={(rows) => <TradeJournalTable rows={rows} editRow={setEditingEntry} deleteRow={handleDelete} />}
+          />
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function TradeJournalTable({ rows, editRow, deleteRow }: { rows: TradeJournalEntry[]; editRow: (row: TradeJournalEntry) => void; deleteRow: (row: TradeJournalEntry) => void }) {
+  return <Table headers={["Edit", "Delete", "Date", "Type", "Outcome", "Amount", "How I Felt", "What Happened", "Lessons Learnt", "Comments"]} rows={rows.map((row) => [
+    <button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button>,
+    <button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button>,
+    row.entry_date,
+    row.trade_type,
+    row.outcome,
+    `Rs ${row.amount}`,
+    row.how_i_felt ?? "-",
+    row.what_happened ?? "-",
+    row.lessons_learnt ?? "-",
+    row.comments ?? "-",
+  ])} />;
+}
+
+const closedTaskStatuses = new Set(["Cancelled", "Completed", "Not_Needed"]);
+const taskTypeOrder = ["Personal", "Official"];
+
+function buildTaskColumns(taskById: Map<number, TodoTask>, includeType: boolean): TaskColumn<TodoTask>[] {
+  const columns: TaskColumn<TodoTask>[] = [
+    { key: "task", label: "Task", value: (row) => row.task },
+  ];
+  if (includeType) {
+    columns.push({ key: "task_type", label: "Type", value: (row) => row.task_type });
+  }
+  columns.push(
+    { key: "task_start", label: "Start", value: (row) => row.task_start ?? "" },
+    { key: "task_due", label: "Due", value: (row) => row.task_due ?? "" },
+    { key: "task_category", label: "Category", value: (row) => row.task_category },
+    { key: "task_group", label: "Group", value: (row) => row.task_group },
+    { key: "task_status", label: "Status", value: (row) => row.task_status },
+    {
+      key: "parent_task_id",
+      label: "Parent",
+      value: (row) => (row.parent_task_id ? taskById.get(row.parent_task_id)?.task ?? "" : ""),
+    },
+    { key: "task_comments", label: "Comments", value: (row) => row.task_comments ?? "" },
+  );
+  return columns;
+}
+
+function TodoView({ tasks, recurringTasks, dropdownOptions, saving, submitTodoTask, deleteTodoTask, submitRecurringTask, deleteRecurringTask }: {
+  tasks: TodoTask[];
+  recurringTasks: RecurringTask[];
+  dropdownOptions: DropdownOption[];
+  saving: boolean;
+  submitTodoTask: (event: FormEvent<HTMLFormElement>, taskId?: number) => Promise<void>;
+  deleteTodoTask: (taskId: number) => Promise<boolean>;
+  submitRecurringTask: (event: FormEvent<HTMLFormElement>, taskId?: number) => Promise<void>;
+  deleteRecurringTask: (taskId: number) => Promise<boolean>;
+}) {
+  const [editingTask, setEditingTask] = useState<TodoTask | null>(null);
+  const [editingRecurringTask, setEditingRecurringTask] = useState<RecurringTask | null>(null);
+  const recurringTypeOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "task_type"), editingRecurringTask?.task_type);
+  const recurringCategoryOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "task_category"), editingRecurringTask?.task_category);
+  const recurringGroupOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "task_group"), editingRecurringTask?.task_group);
+  const recurringStatusOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "task_status"), editingRecurringTask?.task_status);
+  const recurringFrequencyOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "task_frequency"), editingRecurringTask?.frequency);
+  const recurringColumns = useMemo(() => buildRecurringTaskColumns(), []);
+  const taskTypeOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "task_type"), editingTask?.task_type);
+  const taskCategoryOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "task_category"), editingTask?.task_category);
+  const taskGroupOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "task_group"), editingTask?.task_group);
+  const taskStatusOptions = optionsWithCurrent(dropdownValues(dropdownOptions, "task_status"), editingTask?.task_status);
+
+  const taskById = useMemo(() => new Map(tasks.map((row) => [row.id, row])), [tasks]);
+  const openTasks = useMemo(() => tasks.filter((row) => !closedTaskStatuses.has(row.task_status)), [tasks]);
+  const closedTasks = useMemo(() => tasks.filter((row) => closedTaskStatuses.has(row.task_status)), [tasks]);
+  const openGroups = useMemo(() => groupRowsByCategory(openTasks, (row) => row.task_type, taskTypeOrder), [openTasks]);
+  const openColumns = useMemo(() => buildTaskColumns(taskById, false), [taskById]);
+  const closedColumns = useMemo(() => buildTaskColumns(taskById, true), [taskById]);
+  const parentCandidates = openTasks.filter((row) => row.id !== editingTask?.id);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    await submitTodoTask(event, editingTask?.id);
+    setEditingTask(null);
+  }
+
+  async function handleDelete(row: TodoTask) {
+    const deleted = await deleteTodoTask(row.id);
+    if (deleted && editingTask?.id === row.id) {
+      setEditingTask(null);
+    }
+  }
+
+  async function handleSubmitRecurring(event: FormEvent<HTMLFormElement>) {
+    await submitRecurringTask(event, editingRecurringTask?.id);
+    setEditingRecurringTask(null);
+  }
+
+  async function handleDeleteRecurring(row: RecurringTask) {
+    const deleted = await deleteRecurringTask(row.id);
+    if (deleted && editingRecurringTask?.id === row.id) {
+      setEditingRecurringTask(null);
+    }
+  }
+
+  return (
+    <div className="stack">
+      <Panel title="Open Tasks">
+        <div className="section">
+          {openGroups.length ? (
+            <div className="log-category-groups">
+              {openGroups.map((group) => (
+                <div key={group.label} className="log-category-group">
+                  <h3>{group.label}</h3>
+                  <SortableTaskTable rows={group.rows} columns={openColumns} editRow={setEditingTask} deleteRow={handleDelete} />
+                </div>
+              ))}
+            </div>
+          ) : <p className="hint">No open tasks yet.</p>}
+        </div>
+      </Panel>
+      <Panel title={editingTask ? "Edit Task" : "Create Task / Sub-task"}>
+        <form className="section" key={editingTask?.id ?? "new-task"} onSubmit={handleSubmit}>
+          <div className="form-grid">
+            <label>Task<input name="task" defaultValue={editingTask?.task ?? ""} required /></label>
+            <label>Parent task (optional, for sub-tasks)
+              <select name="parent_task_id" defaultValue={editingTask?.parent_task_id ?? ""}>
+                <option value="">- none -</option>
+                {parentCandidates.map((row) => <option key={row.id} value={row.id}>{row.task}</option>)}
+              </select>
+            </label>
+            <label>Start date<input name="task_start" type="date" defaultValue={editingTask?.task_start ?? ""} /></label>
+            <label>Due date<input name="task_due" type="date" defaultValue={editingTask?.task_due ?? ""} /></label>
+            <label>Type<select name="task_type" defaultValue={editingTask?.task_type ?? taskTypeOptions[0]} required>{taskTypeOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label>Category<select name="task_category" defaultValue={editingTask?.task_category ?? taskCategoryOptions[0]} required>{taskCategoryOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label>Group<select name="task_group" defaultValue={editingTask?.task_group ?? taskGroupOptions[0]} required>{taskGroupOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label>Status<select name="task_status" defaultValue={editingTask?.task_status ?? "Open"} required>{taskStatusOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+          </div>
+          <label>Comments<textarea name="task_comments" defaultValue={editingTask?.task_comments ?? ""} /></label>
+          <div className="actions">
+            <button className="button" disabled={saving}>{editingTask ? "Update Task" : "Save Task"}</button>
+            {editingTask && <button className="button secondary" type="button" disabled={saving} onClick={() => setEditingTask(null)}>Cancel Edit</button>}
+          </div>
+        </form>
+      </Panel>
+      <Panel title="Cancelled / Completed / Not Needed">
+        <SortableTaskTable rows={closedTasks} columns={closedColumns} editRow={setEditingTask} deleteRow={handleDelete} />
+      </Panel>
+      <Panel title="Recurring Tasks">
+        <div className="section">
+          <p className="hint">Recurring tasks automatically create a new open task each time they come due. Pick a frequency and schedule below — the next due date is calculated for you.</p>
+          <SortableTaskTable rows={recurringTasks} columns={recurringColumns} editRow={setEditingRecurringTask} deleteRow={handleDeleteRecurring} />
+        </div>
+        <RecurringTaskForm
+          key={editingRecurringTask?.id ?? "new-recurring-task"}
+          editingTask={editingRecurringTask}
+          typeOptions={recurringTypeOptions}
+          categoryOptions={recurringCategoryOptions}
+          groupOptions={recurringGroupOptions}
+          statusOptions={recurringStatusOptions}
+          frequencyOptions={recurringFrequencyOptions}
+          saving={saving}
+          onSubmit={handleSubmitRecurring}
+          onCancel={() => setEditingRecurringTask(null)}
+        />
+      </Panel>
+    </div>
+  );
+}
+
+const weekdayOptions = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const monthOptions = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const dayOfMonthOptions = Array.from({ length: 31 }, (_, index) => index + 1);
+
+function describeRecurringSchedule(row: RecurringTask) {
+  if (row.frequency === "weekly") return row.day_of_week ?? "-";
+  if (row.frequency === "monthly") return row.day_of_month ? `Day ${row.day_of_month}` : "-";
+  if (row.frequency === "yearly") return row.day_of_month ? `${monthOptions[(row.month_of_year ?? 1) - 1]} ${row.day_of_month}` : "-";
+  return "Every day";
+}
+
+function buildRecurringTaskColumns(): TaskColumn<RecurringTask>[] {
+  return [
+    { key: "task", label: "Task", value: (row) => row.task },
+    { key: "task_type", label: "Type", value: (row) => row.task_type },
+    { key: "frequency", label: "Frequency", value: (row) => row.frequency },
+    { key: "schedule", label: "Schedule", value: (row) => describeRecurringSchedule(row) },
+    { key: "task_due", label: "Next Due", value: (row) => row.task_due ?? "" },
+    { key: "task_category", label: "Category", value: (row) => row.task_category },
+    { key: "task_group", label: "Group", value: (row) => row.task_group },
+    { key: "task_status", label: "Status", value: (row) => row.task_status },
+    { key: "task_comments", label: "Comments", value: (row) => row.task_comments ?? "" },
+  ];
+}
+
+function RecurringTaskForm({ editingTask, typeOptions, categoryOptions, groupOptions, statusOptions, frequencyOptions, saving, onSubmit, onCancel }: {
+  editingTask: RecurringTask | null;
+  typeOptions: string[];
+  categoryOptions: string[];
+  groupOptions: string[];
+  statusOptions: string[];
+  frequencyOptions: string[];
+  saving: boolean;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onCancel: () => void;
+}) {
+  const [frequency, setFrequency] = useState(editingTask?.frequency ?? frequencyOptions[0] ?? "daily");
+
+  return (
+    <form className="section" onSubmit={onSubmit}>
+      <div className="form-grid">
+        <label>Task<input name="task" defaultValue={editingTask?.task ?? ""} required /></label>
+        <label>Frequency
+          <select name="frequency" value={frequency} onChange={(event) => setFrequency(event.currentTarget.value)} required>
+            {frequencyOptions.map((item) => <option key={item}>{item}</option>)}
+          </select>
+        </label>
+        {frequency === "weekly" && (
+          <label>Day of week
+            <select name="day_of_week" defaultValue={editingTask?.day_of_week ?? weekdayOptions[0]} required>
+              {weekdayOptions.map((item) => <option key={item}>{item}</option>)}
+            </select>
+          </label>
+        )}
+        {frequency === "monthly" && (
+          <label>Day of month
+            <select name="day_of_month" defaultValue={editingTask?.day_of_month ?? 1} required>
+              {dayOfMonthOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </label>
+        )}
+        {frequency === "yearly" && (
+          <>
+            <label>Month
+              <select name="month_of_year" defaultValue={editingTask?.month_of_year ?? 1} required>
+                {monthOptions.map((label, index) => <option key={label} value={index + 1}>{label}</option>)}
+              </select>
+            </label>
+            <label>Day of month
+              <select name="day_of_month" defaultValue={editingTask?.day_of_month ?? 1} required>
+                {dayOfMonthOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+              </select>
+            </label>
+          </>
+        )}
+        <label>Type<select name="task_type" defaultValue={editingTask?.task_type ?? typeOptions[0]} required>{typeOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+        <label>Category<select name="task_category" defaultValue={editingTask?.task_category ?? categoryOptions[0]} required>{categoryOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+        <label>Group<select name="task_group" defaultValue={editingTask?.task_group ?? groupOptions[0]} required>{groupOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+        <label>Status<select name="task_status" defaultValue={editingTask?.task_status ?? "Open"} required>{statusOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+      </div>
+      <label>Comments<textarea name="task_comments" defaultValue={editingTask?.task_comments ?? ""} /></label>
+      <div className="actions">
+        <button className="button" disabled={saving}>{editingTask ? "Update Recurring Task" : "Save Recurring Task"}</button>
+        {editingTask && <button className="button secondary" type="button" disabled={saving} onClick={onCancel}>Cancel Edit</button>}
+      </div>
+    </form>
+  );
+}
+
+type TaskColumn<T> = {
+  key: string;
+  label: string;
+  value: (row: T) => string;
+};
+
+function compareSortValues(a: string, b: string) {
+  const aNum = a !== "" && !Number.isNaN(Number(a)) ? Number(a) : null;
+  const bNum = b !== "" && !Number.isNaN(Number(b)) ? Number(b) : null;
+  if (aNum !== null && bNum !== null) return aNum - bNum;
+  return a.localeCompare(b);
+}
+
+function SortableTaskTable<T extends { id: number }>({ rows, columns, editRow, deleteRow }: {
+  rows: T[];
+  columns: TaskColumn<T>[];
+  editRow: (row: T) => void;
+  deleteRow: (row: T) => void;
+}) {
+  const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(null);
+
+  const sortedRows = useMemo(() => {
+    if (!sort) return rows;
+    const column = columns.find((item) => item.key === sort.key);
+    if (!column) return rows;
+    const decorated = rows.map((row, index) => ({ row, index, value: column.value(row) }));
+    decorated.sort((a, b) => compareSortValues(a.value, b.value) || a.index - b.index);
+    if (sort.dir === "desc") decorated.reverse();
+    return decorated.map((item) => item.row);
+  }, [rows, sort, columns]);
+
+  function toggleSort(key: string) {
+    setSort((current) => {
+      if (!current || current.key !== key) return { key, dir: "asc" };
+      return { key, dir: current.dir === "asc" ? "desc" : "asc" };
+    });
+  }
+
+  return (
+    <div className="table-wrap section">
+      <table>
+        <thead>
+          <tr>
+            <th className="table-action">Edit</th>
+            <th className="table-action">Delete</th>
+            {columns.map((column) => (
+              <th key={column.key}>
+                <button type="button" className="sort-header" onClick={() => toggleSort(column.key)}>
+                  {column.label}
+                  {sort?.key === column.key ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
+                </button>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {sortedRows.length ? sortedRows.map((row) => (
+            <tr key={row.id}>
+              <td className="table-action"><button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button></td>
+              <td className="table-action"><button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button></td>
+              {columns.map((column) => (
+                <td data-label={column.label} key={column.key}>{column.value(row) || "-"}</td>
+              ))}
+            </tr>
+          )) : <tr><td colSpan={columns.length + 2}>No tasks yet.</td></tr>}
+        </tbody>
+      </table>
     </div>
   );
 }

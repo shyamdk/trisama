@@ -34,5 +34,5 @@ git push --force-with-lease origin main
 
 ---------------------------- on oracle cloud -----------
 
-ssh opc@144.24.127.216
+ssh opc@161.118.162.75
 sudo dnf install -y git

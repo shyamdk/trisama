@@ -296,6 +296,74 @@ class ReminderOut(ReminderCreate):
     model_config = {"from_attributes": True}
 
 
+class TradeJournalEntryCreate(BaseModel):
+    user_id: int | None = None
+    entry_date: date = Field(default_factory=date.today)
+    trade_type: str
+    outcome: str
+    amount: float = Field(default=0, ge=0)
+    how_i_felt: str | None = None
+    what_happened: str | None = None
+    lessons_learnt: str | None = None
+    comments: str | None = None
+
+
+class TradeJournalEntryOut(TradeJournalEntryCreate):
+    id: int
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class TradeLessonsInsightOut(BaseModel):
+    lessons: list[str]
+    source_count: int
+    ai_generated: bool
+
+
+class TodoTaskCreate(BaseModel):
+    user_id: int | None = None
+    parent_task_id: int | None = None
+    recurring_task_id: int | None = None
+    task: str
+    task_start: date | None = None
+    task_due: date | None = None
+    task_type: str
+    task_category: str
+    task_group: str
+    task_status: str = "Open"
+    task_comments: str | None = None
+
+
+class TodoTaskOut(TodoTaskCreate):
+    id: int
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RecurringTaskCreate(BaseModel):
+    user_id: int | None = None
+    task: str
+    task_type: str
+    task_category: str
+    task_group: str
+    task_status: str = "Open"
+    task_comments: str | None = None
+    frequency: str
+    day_of_week: str | None = None
+    day_of_month: int | None = Field(default=None, ge=1, le=31)
+    month_of_year: int | None = Field(default=None, ge=1, le=12)
+
+
+class RecurringTaskOut(RecurringTaskCreate):
+    id: int
+    task_due: date | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class DropdownOptionCreate(BaseModel):
     dropdown_key: str = Field(min_length=1, max_length=80)
     value: str = Field(min_length=1, max_length=160)
