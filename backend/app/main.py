@@ -71,6 +71,7 @@ from .scoring import build_coach_brief, calculate_category_scores, calculate_lif
 app = FastAPI(title="PLOS API", version="0.1.0")
 scheduler = BackgroundScheduler()
 CRITICAL_TASK_CATEGORY = "Critical"
+CRITICAL_TASK_REMINDER_TIMEZONE = "Asia/Kolkata"
 DEFAULT_USER_ID = 1
 DEFAULT_ADMIN_EMAIL = os.getenv("PLOS_DEFAULT_ADMIN_EMAIL")
 DEFAULT_ADMIN_PASSWORD = os.getenv("PLOS_DEFAULT_ADMIN_PASSWORD")
@@ -203,7 +204,7 @@ def startup() -> None:
     if not scheduler.running:
         scheduler.add_job(
             run_critical_task_reminders_job,
-            CronTrigger(hour="7-19", minute=0),
+            CronTrigger(hour="7-19", minute=0, timezone=CRITICAL_TASK_REMINDER_TIMEZONE),
             id="critical_task_reminders",
             replace_existing=True,
         )
