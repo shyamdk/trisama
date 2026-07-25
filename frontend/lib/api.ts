@@ -228,6 +228,7 @@ export type TodoTask = {
   task_group: string;
   task_status: string;
   task_comments: string | null;
+  completed_at: string | null;
   created_at: string;
 };
 

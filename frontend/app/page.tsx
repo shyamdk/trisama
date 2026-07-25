@@ -218,6 +218,15 @@ function currentTime() {
   return new Date().toTimeString().slice(0, 5);
 }
 
+function parseUtcTimestamp(value: string) {
+  return new Date(value.endsWith("Z") ? value : `${value}Z`);
+}
+
+function isToday(value: Date) {
+  const now = new Date();
+  return value.getFullYear() === now.getFullYear() && value.getMonth() === now.getMonth() && value.getDate() === now.getDate();
+}
+
 function timeValue(value?: string | null) {
   return value ? value.slice(0, 5) : null;
 }
@@ -781,6 +790,27 @@ export default function Home() {
     return deleteEntry("/todo-tasks", taskId, "Delete this task?");
   }
 
+  async function completeTodoTask(task: TodoTask) {
+    setSaving(true);
+    try {
+      await apiPatch(userPath(`/todo-tasks/${task.id}`, user?.id ?? 1), {
+        parent_task_id: task.parent_task_id,
+        recurring_task_id: task.recurring_task_id,
+        task: task.task,
+        task_start: task.task_start,
+        task_due: task.task_due,
+        task_type: task.task_type,
+        task_category: task.task_category,
+        task_group: task.task_group,
+        task_status: "Completed",
+        task_comments: task.task_comments,
+      });
+      await loadAll();
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function submitRecurringTask(event: FormEvent<HTMLFormElement>, taskId?: number) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -1056,7 +1086,7 @@ export default function Home() {
       {active === "Bad Habits" && <HabitView title="Bad Habits" category="bad_habit" rows={habitsByCategory.bad_habit ?? []} saving={saving} submitHabit={submitHabit} deleteHabit={deleteHabit} presets={dropdownValues(dropdownOptions, "bad_habit_name")} />}
       {active === "Expense Tracker" && <ExpenseTrackerView expenses={expenses} dropdownOptions={dropdownOptions} saving={saving} submitExpense={submitExpense} deleteExpense={deleteExpense} />}
       {active === "T-Journal" && <TradeJournalView entries={tradeJournalEntries} insight={tradeLessonsInsight} dropdownOptions={dropdownOptions} saving={saving} submitTradeJournal={submitTradeJournal} deleteTradeJournal={deleteTradeJournal} fetchTradeLessonsInsight={fetchTradeLessonsInsight} />}
-      {active === "To-Do" && <TodoView tasks={todoTasks} recurringTasks={recurringTasks} dropdownOptions={dropdownOptions} saving={saving} submitTodoTask={submitTodoTask} deleteTodoTask={deleteTodoTask} submitRecurringTask={submitRecurringTask} deleteRecurringTask={deleteRecurringTask} />}
+      {active === "To-Do" && <TodoView tasks={todoTasks} recurringTasks={recurringTasks} dropdownOptions={dropdownOptions} saving={saving} submitTodoTask={submitTodoTask} deleteTodoTask={deleteTodoTask} completeTodoTask={completeTodoTask} submitRecurringTask={submitRecurringTask} deleteRecurringTask={deleteRecurringTask} />}
       {active === "Reminders" && <ReminderView reminders={reminders} dropdownOptions={dropdownOptions} saving={saving} submitReminder={submitReminder} deleteReminder={deleteReminder} />}
       {active === "Reports" && report && <ReportView report={report} userId={user.id} setReport={setReport} />}
       {active === "Admin" && user.role === "admin" && token && <AdminView users={adminUsers} dropdownOptions={dropdownOptions} token={token} saving={saving} setSaving={setSaving} reload={() => loadAll()} setDropdownOptions={setDropdownOptions} onAuthExpired={expireSession} />}
@@ -2066,13 +2096,14 @@ function buildTaskColumns(taskById: Map<number, TodoTask>, includeType: boolean)
   return columns;
 }
 
-function TodoView({ tasks, recurringTasks, dropdownOptions, saving, submitTodoTask, deleteTodoTask, submitRecurringTask, deleteRecurringTask }: {
+function TodoView({ tasks, recurringTasks, dropdownOptions, saving, submitTodoTask, deleteTodoTask, completeTodoTask, submitRecurringTask, deleteRecurringTask }: {
   tasks: TodoTask[];
   recurringTasks: RecurringTask[];
   dropdownOptions: DropdownOption[];
   saving: boolean;
   submitTodoTask: (event: FormEvent<HTMLFormElement>, taskId?: number) => Promise<void>;
   deleteTodoTask: (taskId: number) => Promise<boolean>;
+  completeTodoTask: (task: TodoTask) => Promise<void>;
   submitRecurringTask: (event: FormEvent<HTMLFormElement>, taskId?: number) => Promise<void>;
   deleteRecurringTask: (taskId: number) => Promise<boolean>;
 }) {
@@ -2095,6 +2126,12 @@ function TodoView({ tasks, recurringTasks, dropdownOptions, saving, submitTodoTa
   const openGroups = useMemo(() => groupRowsByCategory(openTasks, (row) => row.task_type, taskTypeOrder), [openTasks]);
   const openColumns = useMemo(() => buildTaskColumns(taskById, false), [taskById]);
   const closedColumns = useMemo(() => buildTaskColumns(taskById, true), [taskById]);
+  const completedToday = useMemo(() => {
+    return tasks
+      .filter((row) => row.task_status === "Completed" && row.completed_at && isToday(parseUtcTimestamp(row.completed_at)))
+      .sort((a, b) => parseUtcTimestamp(b.completed_at as string).getTime() - parseUtcTimestamp(a.completed_at as string).getTime());
+  }, [tasks]);
+  const completedTodayColumns = useMemo(() => buildCompletedTodayColumns(taskById), [taskById]);
   const parentCandidates = openTasks.filter((row) => row.id !== editingTask?.id);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -2105,6 +2142,13 @@ function TodoView({ tasks, recurringTasks, dropdownOptions, saving, submitTodoTa
   async function handleDelete(row: TodoTask) {
     const deleted = await deleteTodoTask(row.id);
     if (deleted && editingTask?.id === row.id) {
+      setEditingTask(null);
+    }
+  }
+
+  async function handleComplete(row: TodoTask) {
+    await completeTodoTask(row);
+    if (editingTask?.id === row.id) {
       setEditingTask(null);
     }
   }
@@ -2130,7 +2174,7 @@ function TodoView({ tasks, recurringTasks, dropdownOptions, saving, submitTodoTa
               {openGroups.map((group) => (
                 <div key={group.label} className="log-category-group">
                   <h3>{group.label}</h3>
-                  <SortableTaskTable rows={group.rows} columns={openColumns} editRow={setEditingTask} deleteRow={handleDelete} />
+                  <SortableTaskTable rows={group.rows} columns={openColumns} editRow={setEditingTask} deleteRow={handleDelete} completeRow={handleComplete} />
                 </div>
               ))}
             </div>
@@ -2182,8 +2226,23 @@ function TodoView({ tasks, recurringTasks, dropdownOptions, saving, submitTodoTa
           onCancel={() => setEditingRecurringTask(null)}
         />
       </Panel>
+      <Panel title="Completed Today">
+        <SortableTaskTable rows={completedToday} columns={completedTodayColumns} editRow={setEditingTask} deleteRow={handleDelete} />
+      </Panel>
     </div>
   );
+}
+
+function buildCompletedTodayColumns(taskById: Map<number, TodoTask>): TaskColumn<TodoTask>[] {
+  return [
+    { key: "task", label: "Task", value: (row) => row.task },
+    { key: "task_type", label: "Type", value: (row) => row.task_type },
+    { key: "task_category", label: "Category", value: (row) => row.task_category },
+    { key: "task_group", label: "Group", value: (row) => row.task_group },
+    { key: "completed_at", label: "Completed At", value: (row) => (row.completed_at ? parseUtcTimestamp(row.completed_at).toTimeString().slice(0, 5) : "") },
+    { key: "parent_task_id", label: "Parent", value: (row) => (row.parent_task_id ? taskById.get(row.parent_task_id)?.task ?? "" : "") },
+    { key: "task_comments", label: "Comments", value: (row) => row.task_comments ?? "" },
+  ];
 }
 
 const weekdayOptions = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -2288,11 +2347,12 @@ function compareSortValues(a: string, b: string) {
   return a.localeCompare(b);
 }
 
-function SortableTaskTable<T extends { id: number }>({ rows, columns, editRow, deleteRow }: {
+function SortableTaskTable<T extends { id: number }>({ rows, columns, editRow, deleteRow, completeRow }: {
   rows: T[];
   columns: TaskColumn<T>[];
   editRow: (row: T) => void;
   deleteRow: (row: T) => void;
+  completeRow?: (row: T) => void;
 }) {
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(null);
 
@@ -2320,6 +2380,7 @@ function SortableTaskTable<T extends { id: number }>({ rows, columns, editRow, d
           <tr>
             <th className="table-action">Edit</th>
             <th className="table-action">Delete</th>
+            {completeRow && <th className="table-action">Complete</th>}
             {columns.map((column) => (
               <th key={column.key}>
                 <button type="button" className="sort-header" onClick={() => toggleSort(column.key)}>
@@ -2335,11 +2396,12 @@ function SortableTaskTable<T extends { id: number }>({ rows, columns, editRow, d
             <tr key={row.id}>
               <td className="table-action"><button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button></td>
               <td className="table-action"><button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button></td>
+              {completeRow && <td className="table-action"><button className="button mini" type="button" onClick={() => completeRow(row)}>Complete</button></td>}
               {columns.map((column) => (
                 <td data-label={column.label} key={column.key}>{column.value(row) || "-"}</td>
               ))}
             </tr>
-          )) : <tr><td colSpan={columns.length + 2}>No tasks yet.</td></tr>}
+          )) : <tr><td colSpan={columns.length + (completeRow ? 3 : 2)}>No tasks yet.</td></tr>}
         </tbody>
       </table>
     </div>

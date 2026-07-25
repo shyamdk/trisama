@@ -373,6 +373,8 @@ def ensure_user_columns(db: Session) -> None:
     todo_task_columns = {row[1] for row in db.connection().exec_driver_sql("PRAGMA table_info(todo_tasks)")}
     if "recurring_task_id" not in todo_task_columns:
         db.connection().exec_driver_sql("ALTER TABLE todo_tasks ADD COLUMN recurring_task_id INTEGER")
+    if "completed_at" not in todo_task_columns:
+        db.connection().exec_driver_sql("ALTER TABLE todo_tasks ADD COLUMN completed_at DATETIME")
 
     recurring_task_columns = {row[1] for row in db.connection().exec_driver_sql("PRAGMA table_info(recurring_tasks)")}
     if "day_of_week" not in recurring_task_columns:
@@ -1516,6 +1518,8 @@ def get_trade_lessons_insight(user_id: int = Query(DEFAULT_USER_ID), db: Session
 def create_todo_task(payload: TodoTaskCreate, user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> TodoTask:
     get_user(db, user_id)
     item = TodoTask(**with_user(payload.model_dump(), user_id))
+    if item.task_status == "Completed":
+        item.completed_at = datetime.utcnow()
     db.add(item)
     db.commit()
     db.refresh(item)
@@ -1538,7 +1542,12 @@ def update_todo_task(
     db: Session = Depends(get_db),
 ) -> TodoTask:
     item = get_owned_item(db, TodoTask, user_id, task_id, "Task")
+    was_completed = item.task_status == "Completed"
     apply_payload(item, payload.model_dump())
+    if item.task_status == "Completed" and not was_completed:
+        item.completed_at = datetime.utcnow()
+    elif item.task_status != "Completed":
+        item.completed_at = None
     db.commit()
     db.refresh(item)
     return item
