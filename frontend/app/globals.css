@@ -339,6 +339,10 @@ h3 {
   background: var(--risk);
 }
 
+.button.warn {
+  background: var(--warn);
+}
+
 .button:disabled {
   cursor: not-allowed;
   opacity: 0.6;

@@ -229,6 +229,7 @@ export type TodoTask = {
   task_status: string;
   task_comments: string | null;
   completed_at: string | null;
+  last_follow_up_at: string | null;
   created_at: string;
 };
 

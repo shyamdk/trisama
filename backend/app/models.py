@@ -242,6 +242,7 @@ class TodoTask(Base, TimestampMixin):
     task_status: Mapped[str] = mapped_column(String(40), default="Open", index=True)
     task_comments: Mapped[str | None] = mapped_column(Text, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_follow_up_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
 
 class RecurringTask(Base, TimestampMixin):

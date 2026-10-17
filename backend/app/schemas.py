@@ -338,6 +338,7 @@ class TodoTaskCreate(BaseModel):
 class TodoTaskOut(TodoTaskCreate):
     id: int
     completed_at: datetime | None = None
+    last_follow_up_at: datetime | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

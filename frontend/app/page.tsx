@@ -811,6 +811,16 @@ export default function Home() {
     }
   }
 
+  async function followUpTodoTask(task: TodoTask) {
+    setSaving(true);
+    try {
+      await apiPost(userPath(`/todo-tasks/${task.id}/follow-up?follow_up_date=${isoDate()}`, user?.id ?? 1), {});
+      await loadAll();
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function submitRecurringTask(event: FormEvent<HTMLFormElement>, taskId?: number) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -1086,7 +1096,7 @@ export default function Home() {
       {active === "Bad Habits" && <HabitView title="Bad Habits" category="bad_habit" rows={habitsByCategory.bad_habit ?? []} saving={saving} submitHabit={submitHabit} deleteHabit={deleteHabit} presets={dropdownValues(dropdownOptions, "bad_habit_name")} />}
       {active === "Expense Tracker" && <ExpenseTrackerView expenses={expenses} dropdownOptions={dropdownOptions} saving={saving} submitExpense={submitExpense} deleteExpense={deleteExpense} />}
       {active === "T-Journal" && <TradeJournalView entries={tradeJournalEntries} insight={tradeLessonsInsight} dropdownOptions={dropdownOptions} saving={saving} submitTradeJournal={submitTradeJournal} deleteTradeJournal={deleteTradeJournal} fetchTradeLessonsInsight={fetchTradeLessonsInsight} />}
-      {active === "To-Do" && <TodoView tasks={todoTasks} recurringTasks={recurringTasks} dropdownOptions={dropdownOptions} saving={saving} submitTodoTask={submitTodoTask} deleteTodoTask={deleteTodoTask} completeTodoTask={completeTodoTask} submitRecurringTask={submitRecurringTask} deleteRecurringTask={deleteRecurringTask} />}
+      {active === "To-Do" && <TodoView tasks={todoTasks} recurringTasks={recurringTasks} dropdownOptions={dropdownOptions} saving={saving} submitTodoTask={submitTodoTask} deleteTodoTask={deleteTodoTask} completeTodoTask={completeTodoTask} followUpTodoTask={followUpTodoTask} submitRecurringTask={submitRecurringTask} deleteRecurringTask={deleteRecurringTask} />}
       {active === "Reminders" && <ReminderView reminders={reminders} dropdownOptions={dropdownOptions} saving={saving} submitReminder={submitReminder} deleteReminder={deleteReminder} />}
       {active === "Reports" && report && <ReportView report={report} userId={user.id} setReport={setReport} />}
       {active === "Admin" && user.role === "admin" && token && <AdminView users={adminUsers} dropdownOptions={dropdownOptions} token={token} saving={saving} setSaving={setSaving} reload={() => loadAll()} setDropdownOptions={setDropdownOptions} onAuthExpired={expireSession} />}
@@ -2091,12 +2101,17 @@ function buildTaskColumns(taskById: Map<number, TodoTask>, includeType: boolean)
       label: "Parent",
       value: (row) => (row.parent_task_id ? taskById.get(row.parent_task_id)?.task ?? "" : ""),
     },
+    {
+      key: "last_follow_up_at",
+      label: "Last Follow Up",
+      value: (row) => (row.last_follow_up_at ? parseUtcTimestamp(row.last_follow_up_at).toLocaleDateString("en-CA") : ""),
+    },
     { key: "task_comments", label: "Comments", value: (row) => row.task_comments ?? "" },
   );
   return columns;
 }
 
-function TodoView({ tasks, recurringTasks, dropdownOptions, saving, submitTodoTask, deleteTodoTask, completeTodoTask, submitRecurringTask, deleteRecurringTask }: {
+function TodoView({ tasks, recurringTasks, dropdownOptions, saving, submitTodoTask, deleteTodoTask, completeTodoTask, followUpTodoTask, submitRecurringTask, deleteRecurringTask }: {
   tasks: TodoTask[];
   recurringTasks: RecurringTask[];
   dropdownOptions: DropdownOption[];
@@ -2104,6 +2119,7 @@ function TodoView({ tasks, recurringTasks, dropdownOptions, saving, submitTodoTa
   submitTodoTask: (event: FormEvent<HTMLFormElement>, taskId?: number) => Promise<void>;
   deleteTodoTask: (taskId: number) => Promise<boolean>;
   completeTodoTask: (task: TodoTask) => Promise<void>;
+  followUpTodoTask: (task: TodoTask) => Promise<void>;
   submitRecurringTask: (event: FormEvent<HTMLFormElement>, taskId?: number) => Promise<void>;
   deleteRecurringTask: (taskId: number) => Promise<boolean>;
 }) {
@@ -2153,6 +2169,10 @@ function TodoView({ tasks, recurringTasks, dropdownOptions, saving, submitTodoTa
     }
   }
 
+  async function handleFollowUp(row: TodoTask) {
+    await followUpTodoTask(row);
+  }
+
   async function handleSubmitRecurring(event: FormEvent<HTMLFormElement>) {
     await submitRecurringTask(event, editingRecurringTask?.id);
     setEditingRecurringTask(null);
@@ -2174,7 +2194,7 @@ function TodoView({ tasks, recurringTasks, dropdownOptions, saving, submitTodoTa
               {openGroups.map((group) => (
                 <div key={group.label} className="log-category-group">
                   <h3>{group.label}</h3>
-                  <SortableTaskTable rows={group.rows} columns={openColumns} editRow={setEditingTask} deleteRow={handleDelete} completeRow={handleComplete} />
+                  <SortableTaskTable rows={group.rows} columns={openColumns} editRow={setEditingTask} deleteRow={handleDelete} completeRow={handleComplete} followUpRow={handleFollowUp} />
                 </div>
               ))}
             </div>
@@ -2347,12 +2367,13 @@ function compareSortValues(a: string, b: string) {
   return a.localeCompare(b);
 }
 
-function SortableTaskTable<T extends { id: number }>({ rows, columns, editRow, deleteRow, completeRow }: {
+function SortableTaskTable<T extends { id: number }>({ rows, columns, editRow, deleteRow, completeRow, followUpRow }: {
   rows: T[];
   columns: TaskColumn<T>[];
   editRow: (row: T) => void;
   deleteRow: (row: T) => void;
   completeRow?: (row: T) => void;
+  followUpRow?: (row: T) => void;
 }) {
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(null);
 
@@ -2381,6 +2402,7 @@ function SortableTaskTable<T extends { id: number }>({ rows, columns, editRow, d
             <th className="table-action">Edit</th>
             <th className="table-action">Delete</th>
             {completeRow && <th className="table-action">Complete</th>}
+            {followUpRow && <th className="table-action">Follow Up</th>}
             {columns.map((column) => (
               <th key={column.key}>
                 <button type="button" className="sort-header" onClick={() => toggleSort(column.key)}>
@@ -2397,11 +2419,12 @@ function SortableTaskTable<T extends { id: number }>({ rows, columns, editRow, d
               <td className="table-action"><button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button></td>
               <td className="table-action"><button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button></td>
               {completeRow && <td className="table-action"><button className="button mini" type="button" onClick={() => completeRow(row)}>Complete</button></td>}
+              {followUpRow && <td className="table-action"><button className="button mini warn" type="button" onClick={() => followUpRow(row)}>Follow Up</button></td>}
               {columns.map((column) => (
                 <td data-label={column.label} key={column.key}>{column.value(row) || "-"}</td>
               ))}
             </tr>
-          )) : <tr><td colSpan={columns.length + (completeRow ? 3 : 2)}>No tasks yet.</td></tr>}
+          )) : <tr><td colSpan={columns.length + 2 + (completeRow ? 1 : 0) + (followUpRow ? 1 : 0)}>No tasks yet.</td></tr>}
         </tbody>
       </table>
     </div>

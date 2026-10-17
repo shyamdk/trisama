@@ -14,7 +14,7 @@ from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from .database import Base, SessionLocal, engine, get_db
-from .food_ai import apply_food_enrichment, enrich_food_log, food_analysis_for_form
+from .food_ai import apply_food_enrichment, enrich_food_log, food_analysis_for_form, load_dotenv
 from .models import AuthSession, Challenge, DailyCheckIn, DailyChecklistItem, DropdownOption, ExpenseLog, FinanceSnapshot, FoodLog, HabitLog, HealthMetric, MedLog, RecurringTask, Reminder, TodoTask, TradeJournalEntry, UserProfile
 from .telegram_notify import send_telegram_message
 from .trade_ai import distill_trade_lessons
@@ -223,6 +223,9 @@ def run_critical_task_reminders_job() -> None:
 
 
 def send_critical_task_reminders(db: Session) -> None:
+    load_dotenv()
+    if os.getenv("TELEGRAM_REMINDERS_ENABLED", "true").strip().lower() == "false":
+        return
     tasks = (
         db.query(TodoTask)
         .filter(TodoTask.task_category == CRITICAL_TASK_CATEGORY, TodoTask.task_status == "Open")
@@ -375,6 +378,8 @@ def ensure_user_columns(db: Session) -> None:
         db.connection().exec_driver_sql("ALTER TABLE todo_tasks ADD COLUMN recurring_task_id INTEGER")
     if "completed_at" not in todo_task_columns:
         db.connection().exec_driver_sql("ALTER TABLE todo_tasks ADD COLUMN completed_at DATETIME")
+    if "last_follow_up_at" not in todo_task_columns:
+        db.connection().exec_driver_sql("ALTER TABLE todo_tasks ADD COLUMN last_follow_up_at DATETIME")
 
     recurring_task_columns = {row[1] for row in db.connection().exec_driver_sql("PRAGMA table_info(recurring_tasks)")}
     if "day_of_week" not in recurring_task_columns:
@@ -1558,6 +1563,23 @@ def delete_todo_task(task_id: int, user_id: int = Query(DEFAULT_USER_ID), db: Se
     item = get_owned_item(db, TodoTask, user_id, task_id, "Task")
     db.delete(item)
     db.commit()
+
+
+@app.post("/todo-tasks/{task_id}/follow-up", response_model=TodoTaskOut)
+def follow_up_todo_task(
+    task_id: int,
+    user_id: int = Query(DEFAULT_USER_ID),
+    follow_up_date: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> TodoTask:
+    item = get_owned_item(db, TodoTask, user_id, task_id, "Task")
+    now = datetime.utcnow()
+    note = f"Followed up on {follow_up_date or now.date().isoformat()}"
+    item.task_comments = f"{item.task_comments}\n{note}" if item.task_comments else note
+    item.last_follow_up_at = now
+    db.commit()
+    db.refresh(item)
+    return item
 
 
 RECURRING_SCHEDULE_FIELDS = ("frequency", "day_of_week", "day_of_month", "month_of_year")
