@@ -1444,7 +1444,7 @@ function MedsView({ meds, dropdownOptions, saving, submitMed, deleteMed }: { med
       <Panel title={editingMed ? "Edit Meds Entry" : "Meds Entry"}>
         <form className="section" key={editingMed?.id ?? "new-med"} onSubmit={handleSubmit}>
           <div className="form-grid">
-            <label>Date<input name="med_date" type="date" defaultValue={editingMed?.med_date ?? isoDate()} min={editingMed ? undefined : isoDate(-2)} max={isoDate()} required /></label>
+            <label>Date<input name="med_date" type="date" defaultValue={editingMed?.med_date ?? isoDate()} max={isoDate()} required /></label>
             <label>Time<input name="med_time" type="time" defaultValue={timeValue(editingMed?.med_time) ?? currentTime()} required /></label>
             <label>Meds<select name="med_name" defaultValue={editingMed?.med_name ?? medOptions[0]} required>{medOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
           </div>
@@ -1476,6 +1476,10 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
   const [postMealWalkMeters, setPostMealWalkMeters] = useState(editingFood?.post_meal_walk_meters === null || editingFood?.post_meal_walk_meters === undefined ? "" : String(editingFood.post_meal_walk_meters));
   const mealTypeOptions = mealTypeOptionsForTime(dropdownValues(dropdownOptions, "meal_type"), mealTime, editingFood?.meal_type);
   const calorieRows = useMemo(() => dailyCalorieRows(foods, calorieTarget), [foods, calorieTarget]);
+  const todayCalorieRow = useMemo(() => {
+    const target = Math.round(calorieTarget);
+    return calorieRows.find((row) => row.entryDate === isoDate()) ?? { entryDate: isoDate(), consumed: 0, target, balance: target, quality: null };
+  }, [calorieRows, calorieTarget]);
   const fastingRows = useMemo(() => dailyFastingRows(foods), [foods]);
   const walkRequired = requiresPostMealWalk(selectedMealType);
   const walkDistanceReady = !walkRequired || Number(postMealWalkMeters) > 0;
@@ -1598,6 +1602,13 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
         </form>
       </Panel>
       <div className="stack">
+        <section className="grid metrics">
+          <Metric
+            title="Today's Calories"
+            value={`${todayCalorieRow.consumed} / ${todayCalorieRow.target} cal`}
+            note={todayCalorieRow.balance >= 0 ? `${todayCalorieRow.balance} cal left` : `${Math.abs(todayCalorieRow.balance)} cal over`}
+          />
+        </section>
         <Panel title="Daily Calories">
           <Table headers={["Date", "Consumed", "Target", "Balance", "Quality"]} rows={calorieRows.map((row) => [row.entryDate, `${row.consumed} cal`, `${row.target} cal`, row.balance >= 0 ? `${row.balance} cal left` : `${Math.abs(row.balance)} cal over`, row.quality === null ? "-" : `${row.quality}/100`])} />
         </Panel>
@@ -2906,6 +2917,41 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
     <div className="stack">
       <div className="actions"><button className="button secondary" onClick={() => load("daily")}>Daily</button><button className="button secondary" onClick={() => load("weekly")}>Weekly</button><button className="button secondary" onClick={() => load("monthly")}>Monthly</button><button className="button secondary" onClick={() => load("quarterly")}>Quarterly</button></div>
       <section className="grid metrics"><Metric title="Period" value={report.period} note="Generated report" /><Metric title="Life Score" value={String(report.life_score)} note="0-1000" /><Metric title="Accountability" value={String(report.accountability_score)} note="Logging" /></section>
+      <Panel title="21 Day Challenges">
+        <form className="section" key={editingChallenge?.id ?? "new-challenge"} onSubmit={submitChallenge}>
+          <div className="form-grid">
+            <label>Title<input name="title" defaultValue={editingChallenge?.title ?? "21 Day Challenge"} /></label>
+            <label>Target weight kg<input name="target_weight_kg" type="number" step="0.1" defaultValue={editingChallenge?.target_weight_kg ?? ""} required /></label>
+            <label>Start date<input name="start_date" type="date" defaultValue={editingChallenge?.start_date ?? isoDate()} required /></label>
+            <label>End date<input name="end_date" type="date" defaultValue={editingChallenge?.end_date ?? isoDate(20)} required /></label>
+          </div>
+          <label>Notes<textarea name="notes" defaultValue={editingChallenge?.notes ?? ""} /></label>
+          <div className="actions">
+            <button className="button">{editingChallenge ? "Update Challenge" : "Create Challenge"}</button>
+            {editingChallenge && <button className="button secondary" type="button" onClick={() => setEditingChallenge(null)}>Cancel Edit</button>}
+          </div>
+        </form>
+        <div className="stack section">
+          {report.challenges.length ? report.challenges.map((challenge) => {
+            const weightSummary = challengeWeightSummary(challenge);
+            return (
+              <details className="challenge" key={challenge.id}>
+                <summary>
+                  <strong>{challenge.title}</strong>
+                  <span>{challenge.start_date} to {challenge.end_date}</span>
+                  <span>Target: {formatKg(challenge.target_weight_kg)}</span>
+                  <span>Latest: {weightSummary.latest}</span>
+                  <span>To go: {weightSummary.toGo}</span>
+                  <button className="button mini secondary" type="button" onClick={(event) => { event.preventDefault(); setEditingChallenge(challenge); }}>Edit</button>
+                  <button className="button mini secondary" type="button" onClick={(event) => { event.preventDefault(); deleteChallenge(challenge.id); }}>Delete</button>
+                </summary>
+                {challenge.notes && <p className="muted">{challenge.notes}</p>}
+                <Table headers={["Date", "Weight", "Sugar", "Sugar Type", "Sugar Time"]} rows={challenge.days.map((day) => [day.entry_date, day.weight_kg ?? "-", day.sugar ?? "-", day.sugar_context ?? "-", day.sugar_time ?? "-"])} />
+              </details>
+            );
+          }) : <p className="muted">No challenges yet.</p>}
+        </div>
+      </Panel>
       <Panel title="Weight Trend">
         <WeightTrendChart days={report.daily_reports ?? []} />
       </Panel>
@@ -2945,41 +2991,6 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
               />
             </details>
           )) : <p className="muted">No daily report data yet.</p>}
-        </div>
-      </Panel>
-      <Panel title="21 Day Challenges">
-        <form className="section" key={editingChallenge?.id ?? "new-challenge"} onSubmit={submitChallenge}>
-          <div className="form-grid">
-            <label>Title<input name="title" defaultValue={editingChallenge?.title ?? "21 Day Challenge"} /></label>
-            <label>Target weight kg<input name="target_weight_kg" type="number" step="0.1" defaultValue={editingChallenge?.target_weight_kg ?? ""} required /></label>
-            <label>Start date<input name="start_date" type="date" defaultValue={editingChallenge?.start_date ?? isoDate()} required /></label>
-            <label>End date<input name="end_date" type="date" defaultValue={editingChallenge?.end_date ?? isoDate(20)} required /></label>
-          </div>
-          <label>Notes<textarea name="notes" defaultValue={editingChallenge?.notes ?? ""} /></label>
-          <div className="actions">
-            <button className="button">{editingChallenge ? "Update Challenge" : "Create Challenge"}</button>
-            {editingChallenge && <button className="button secondary" type="button" onClick={() => setEditingChallenge(null)}>Cancel Edit</button>}
-          </div>
-        </form>
-        <div className="stack section">
-          {report.challenges.length ? report.challenges.map((challenge) => {
-            const weightSummary = challengeWeightSummary(challenge);
-            return (
-              <details className="challenge" key={challenge.id}>
-                <summary>
-                  <strong>{challenge.title}</strong>
-                  <span>{challenge.start_date} to {challenge.end_date}</span>
-                  <span>Target: {formatKg(challenge.target_weight_kg)}</span>
-                  <span>Latest: {weightSummary.latest}</span>
-                  <span>To go: {weightSummary.toGo}</span>
-                  <button className="button mini secondary" type="button" onClick={(event) => { event.preventDefault(); setEditingChallenge(challenge); }}>Edit</button>
-                  <button className="button mini secondary" type="button" onClick={(event) => { event.preventDefault(); deleteChallenge(challenge.id); }}>Delete</button>
-                </summary>
-                {challenge.notes && <p className="muted">{challenge.notes}</p>}
-                <Table headers={["Date", "Weight", "Sugar", "Sugar Type", "Sugar Time"]} rows={challenge.days.map((day) => [day.entry_date, day.weight_kg ?? "-", day.sugar ?? "-", day.sugar_context ?? "-", day.sugar_time ?? "-"])} />
-              </details>
-            );
-          }) : <p className="muted">No challenges yet.</p>}
         </div>
       </Panel>
       <section className="grid two"><Panel title="Trends"><CoachList title="" rows={report.trends} /></Panel><Panel title="Risks"><CoachList title="" rows={report.risks} /></Panel><Panel title="Recommendations"><CoachList title="" rows={report.recommendations} /></Panel><Panel title="Category Scores"><div className="score-list">{visibleCategoryScores(report.category_scores).map(([key, value]) => <div className="score-row" key={key}><span>{key.replace("_", " ")}</span><strong>{value}</strong></div>)}</div></Panel></section>
