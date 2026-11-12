@@ -373,6 +373,8 @@ def ensure_user_columns(db: Session) -> None:
         db.connection().exec_driver_sql("ALTER TABLE health_metrics ADD COLUMN sugar_context VARCHAR(40)")
     if "shite_count" not in health_columns:
         db.connection().exec_driver_sql("ALTER TABLE health_metrics ADD COLUMN shite_count INTEGER")
+    if "bmi" not in health_columns:
+        db.connection().exec_driver_sql("ALTER TABLE health_metrics ADD COLUMN bmi FLOAT")
 
     habit_columns = {row[1] for row in db.connection().exec_driver_sql("PRAGMA table_info(habit_logs)")}
     if "habit_time" not in habit_columns:
@@ -1898,7 +1900,7 @@ def build_daily_reports(
             for row in date_health
             if any(
                 value is not None
-                for value in [row.body_fat_percent, row.muscle_percent, row.visceral_fat, row.body_age, row.bmr]
+                for value in [row.body_fat_percent, row.muscle_percent, row.visceral_fat, row.body_age, row.bmr, row.bmi]
             )
         ]
         shite_rows = [row for row in date_health if row.shite_count is not None]
@@ -1969,6 +1971,7 @@ def build_daily_reports(
                 "visceral_fat": latest_body.visceral_fat if latest_body else None,
                 "body_age": latest_body.body_age if latest_body else None,
                 "bmr": latest_body.bmr if latest_body else None,
+                "bmi": latest_body.bmi if latest_body else None,
                 "shite_count": latest_shite.shite_count if latest_shite else None,
                 "food_count": len(date_foods),
                 "total_calories": sum(calories) if calories else None,

@@ -141,6 +141,7 @@ class HealthMetricCreate(BaseModel):
     visceral_fat: float | None = None
     body_age: float | None = None
     bmr: float | None = None
+    bmi: float | None = None
     shite_count: int | None = Field(default=None, ge=0, le=100)
     notes: str | None = None
 
@@ -469,6 +470,7 @@ class DailyConsolidatedReportOut(BaseModel):
     visceral_fat: float | None = None
     body_age: float | None = None
     bmr: float | None = None
+    bmi: float | None = None
     shite_count: int | None = None
     food_count: int = 0
     total_calories: float | None = None

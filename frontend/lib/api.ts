@@ -91,6 +91,7 @@ export type HealthMetric = {
   visceral_fat: number | null;
   body_age: number | null;
   bmr: number | null;
+  bmi: number | null;
   shite_count: number | null;
   notes: string | null;
 };
@@ -305,6 +306,7 @@ export type DailyConsolidatedReport = {
   visceral_fat: number | null;
   body_age: number | null;
   bmr: number | null;
+  bmi: number | null;
   shite_count: number | null;
   food_count: number;
   total_calories: number | null;

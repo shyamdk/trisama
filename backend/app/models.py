@@ -83,6 +83,7 @@ class HealthMetric(Base, TimestampMixin):
     visceral_fat: Mapped[float | None] = mapped_column(Float, nullable=True)
     body_age: Mapped[float | None] = mapped_column(Float, nullable=True)
     bmr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bmi: Mapped[float | None] = mapped_column(Float, nullable=True)
     shite_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 

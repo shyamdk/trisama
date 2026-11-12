@@ -36,6 +36,11 @@ import {
 
 const baseTabs = ["Dashboard", "Profile", "Journal", "Health", "Meds", "Food", "Exercise", "Sleep", "Career", "Bad Habits", "Expense Tracker", "T-Journal", "To-Do", "Gym Attendance", "Reminders", "Reports"];
 const CHALLENGE_TAB_EMAIL = "shyamdk@gmail.com";
+// Gym Attendance is a shared household log (Bhumika, Shyam, Laya), but only these two
+// accounts actually share Shyam's data (user_id 3). Anyone else with the module enabled
+// still sees the tab, but falls back to their own (separate, unused) copy.
+const GYM_ATTENDANCE_OWNER_USER_ID = 3;
+const GYM_ATTENDANCE_SHARED_EMAILS = ["shyamdk@gmail.com", "bhumikashyam@yahoo.in"];
 const legacyFastingTimerStorageKey = "plos_fasting_countdown";
 const legacyFastingTimerClearedKey = "plos_fasting_countdown_cleared_at";
 const expiredFastingPromptMs = 12 * 60 * 60 * 1000;
@@ -701,6 +706,7 @@ export default function Home() {
       visceral_fat: numeric(form, "visceral_fat"),
       body_age: numeric(form, "body_age"),
       bmr: numeric(form, "bmr"),
+      bmi: numeric(form, "bmi"),
       shite_count: numeric(form, "shite_count"),
       notes: text(form, "notes"),
     }, event.currentTarget, metricId);
@@ -1120,7 +1126,7 @@ export default function Home() {
       {active === "Expense Tracker" && <ExpenseTrackerView expenses={expenses} dropdownOptions={dropdownOptions} saving={saving} submitExpense={submitExpense} deleteExpense={deleteExpense} />}
       {active === "T-Journal" && <TradeJournalView entries={tradeJournalEntries} insight={tradeLessonsInsight} dropdownOptions={dropdownOptions} saving={saving} submitTradeJournal={submitTradeJournal} deleteTradeJournal={deleteTradeJournal} fetchTradeLessonsInsight={fetchTradeLessonsInsight} />}
       {active === "To-Do" && <TodoView tasks={todoTasks} recurringTasks={recurringTasks} dropdownOptions={dropdownOptions} saving={saving} submitTodoTask={submitTodoTask} deleteTodoTask={deleteTodoTask} completeTodoTask={completeTodoTask} followUpTodoTask={followUpTodoTask} submitRecurringTask={submitRecurringTask} deleteRecurringTask={deleteRecurringTask} />}
-      {active === "Gym Attendance" && <GymAttendanceView userId={user.id} />}
+      {active === "Gym Attendance" && <GymAttendanceView userId={GYM_ATTENDANCE_SHARED_EMAILS.includes(user.email ?? "") ? GYM_ATTENDANCE_OWNER_USER_ID : user.id} />}
       {active === "Reminders" && <ReminderView reminders={reminders} dropdownOptions={dropdownOptions} saving={saving} submitReminder={submitReminder} deleteReminder={deleteReminder} />}
       {active === "Reports" && report && <ReportView report={report} userId={user.id} setReport={setReport} />}
       {active === "21 Day Challenge" && user.email === CHALLENGE_TAB_EMAIL && report && <ChallengeView report={report} userId={user.id} setReport={setReport} />}
@@ -1389,6 +1395,7 @@ function HealthView({ health, dropdownOptions, saving, submitHealthMetric, delet
             <label>Entry date<input name="entry_date" type="date" defaultValue={isoDate()} min={isoDate(-2)} max={isoDate()} required /></label>
             <label>Time<input name="measurement_time" type="time" defaultValue={currentTime()} /></label>
             <label>Weight kg<input name="weight_kg" type="number" step="0.1" /></label>
+            <label>BMI<input name="bmi" type="number" step="0.1" /></label>
             <label>Body fat %<input name="body_fat_percent" type="number" step="0.1" /></label>
             <label>Muscle %<input name="muscle_percent" type="number" step="0.1" /></label>
             <label>Visceral fat<input name="visceral_fat" type="number" step="0.1" /></label>
@@ -1416,6 +1423,7 @@ function HealthView({ health, dropdownOptions, saving, submitHealthMetric, delet
               <label>Entry date<input name="entry_date" type="date" defaultValue={editingHealth.entry_date} max={isoDate()} required /></label>
               <label>Time<input name="measurement_time" type="time" defaultValue={timeValue(editingHealth.measurement_time) ?? ""} /></label>
               <label>Weight kg<input name="weight_kg" type="number" step="0.1" defaultValue={editingHealth.weight_kg ?? ""} /></label>
+              <label>BMI<input name="bmi" type="number" step="0.1" defaultValue={editingHealth.bmi ?? ""} /></label>
               <label>Systolic BP<input name="systolic_bp" type="number" defaultValue={editingHealth.systolic_bp ?? ""} /></label>
               <label>Diastolic BP<input name="diastolic_bp" type="number" defaultValue={editingHealth.diastolic_bp ?? ""} /></label>
               <label>Type<select name="sugar_context" defaultValue={editingHealth.sugar_context ?? ""}><option value="">-</option>{sugarContextOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
@@ -3193,7 +3201,7 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
                   ["Weight", day.weight_kg === null ? "-" : `${day.weight_kg} kg`],
                   ["BP", day.bp ?? "-"],
                   ["Sugar", day.sugar === null ? "-" : `${day.sugar}${day.sugar_context ? ` ${day.sugar_context}` : ""}${day.sugar_time ? ` at ${day.sugar_time}` : ""}`],
-                  ["Body metrics", `Fat: ${day.body_fat_percent ?? "-"} | Muscle: ${day.muscle_percent ?? "-"} | Visceral: ${day.visceral_fat ?? "-"} | Body age: ${day.body_age ?? "-"} | BMR: ${day.bmr ?? "-"}`],
+                  ["Body metrics", `BMI: ${day.bmi ?? "-"} | Fat: ${day.body_fat_percent ?? "-"} | Muscle: ${day.muscle_percent ?? "-"} | Visceral: ${day.visceral_fat ?? "-"} | Body age: ${day.body_age ?? "-"} | BMR: ${day.bmr ?? "-"}`],
                   ["Shite", day.shite_count === null ? "-" : String(day.shite_count)],
                   ["Food", listOrDash(day.food_items)],
                   ["Food quality", `Avg score: ${day.avg_quality_score ?? "-"} | Flags: ${day.food_flags.length ? day.food_flags.join(", ") : "-"}`],
@@ -3381,12 +3389,13 @@ function JournalTable({ rows, editRow, deleteRow }: { rows: DailyCheckIn[]; edit
 }
 
 function HealthTable({ rows, editRow, deleteRow }: { rows: HealthMetric[]; editRow: (row: HealthMetric) => void; deleteRow: (row: HealthMetric) => void }) {
-  return <Table headers={["Edit", "Delete", "Date", "Time", "Weight", "BP", "Sugar", "Type", "Body Fat", "Shite", "Notes"]} rows={rows.map((row) => [
+  return <Table headers={["Edit", "Delete", "Date", "Time", "Weight", "BMI", "BP", "Sugar", "Type", "Body Fat", "Shite", "Notes"]} rows={rows.map((row) => [
     <button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button>,
     <button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button>,
     withDay(row.entry_date),
     timeValue(row.measurement_time) ?? "-",
     row.weight_kg ?? "-",
+    row.bmi ?? "-",
     row.systolic_bp && row.diastolic_bp ? `${row.systolic_bp}/${row.diastolic_bp}` : "-",
     row.blood_sugar ?? "-",
     row.sugar_context ?? "-",
@@ -3457,7 +3466,7 @@ function MedTable({ rows, editRow, deleteRow }: { rows: MedLog[]; editRow: (row:
 const healthMetricCategoryOrder = ["Body Metrics", "Sugar", "BP", "Shite", "Other"];
 
 function healthMetricCategory(row: HealthMetric) {
-  if ([row.weight_kg, row.body_fat_percent, row.muscle_percent, row.visceral_fat, row.body_age, row.bmr].some(hasMetricValue)) {
+  if ([row.weight_kg, row.bmi, row.body_fat_percent, row.muscle_percent, row.visceral_fat, row.body_age, row.bmr].some(hasMetricValue)) {
     return "Body Metrics";
   }
   if (hasMetricValue(row.blood_sugar)) return "Sugar";
