@@ -9,6 +9,8 @@ import {
   ExpenseLog,
   FoodAnalysis,
   FoodLog,
+  GymAttendance,
+  GymCycle,
   HabitLog,
   HealthMetric,
   LoginResponse,
@@ -20,6 +22,7 @@ import {
   TradeJournalEntry,
   TradeLessonsInsight,
   UserProfile,
+  apiBase,
   apiGet,
   apiGetAuth,
   apiDelete,
@@ -31,7 +34,8 @@ import {
   userPath,
 } from "@/lib/api";
 
-const baseTabs = ["Dashboard", "Profile", "Journal", "Health", "Meds", "Food", "Exercise", "Sleep", "Career", "Bad Habits", "Expense Tracker", "T-Journal", "To-Do", "Reminders", "Reports"];
+const baseTabs = ["Dashboard", "Profile", "Journal", "Health", "Meds", "Food", "Exercise", "Sleep", "Career", "Bad Habits", "Expense Tracker", "T-Journal", "To-Do", "Gym Attendance", "Reminders", "Reports"];
+const CHALLENGE_TAB_EMAIL = "shyamdk@gmail.com";
 const legacyFastingTimerStorageKey = "plos_fasting_countdown";
 const legacyFastingTimerClearedKey = "plos_fasting_countdown_cleared_at";
 const expiredFastingPromptMs = 12 * 60 * 60 * 1000;
@@ -50,6 +54,7 @@ const moduleOptions = [
   { key: "journal", label: "Journal" },
   { key: "trade_journal", label: "Trade Journal" },
   { key: "todo", label: "To-Do" },
+  { key: "gym_attendance", label: "Gym Attendance" },
 ];
 const tabModule: Record<string, string | null> = {
   Dashboard: null,
@@ -65,8 +70,10 @@ const tabModule: Record<string, string | null> = {
   "Expense Tracker": "expense_tracker",
   "T-Journal": "trade_journal",
   "To-Do": "todo",
+  "Gym Attendance": "gym_attendance",
   Reminders: "reminders",
   Reports: null,
+  "21 Day Challenge": null,
   Admin: null,
 };
 const defaultDropdownOptions: Record<string, string[]> = {
@@ -216,6 +223,17 @@ function isoDate(offsetDays = 0) {
 
 function currentTime() {
   return new Date().toTimeString().slice(0, 5);
+}
+
+function withDay(value: string | null | undefined): string {
+  if (!value) return value ?? "-";
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!match) return value;
+  const [, yearStr, monthStr, dayStr] = match;
+  const date = new Date(Number(yearStr), Number(monthStr) - 1, Number(dayStr));
+  if (Number.isNaN(date.getTime())) return value;
+  const abbreviation = date.toLocaleDateString("en-US", { weekday: "short" });
+  return `${value} (${abbreviation})`;
 }
 
 function parseUtcTimestamp(value: string) {
@@ -447,7 +465,12 @@ export default function Home() {
   const [now, setNow] = useState(Date.now());
 
   const enabled = enabledModules(user);
-  const tabs = (user?.role === "admin" ? [...baseTabs, "Admin"] : baseTabs).filter((tab) => {
+  const tabsWithExtras = [
+    ...baseTabs,
+    ...(user?.email === CHALLENGE_TAB_EMAIL ? ["21 Day Challenge"] : []),
+    ...(user?.role === "admin" ? ["Admin"] : []),
+  ];
+  const tabs = tabsWithExtras.filter((tab) => {
     const module = tabModule[tab];
     return !module || enabled.includes(module);
   });
@@ -1097,8 +1120,10 @@ export default function Home() {
       {active === "Expense Tracker" && <ExpenseTrackerView expenses={expenses} dropdownOptions={dropdownOptions} saving={saving} submitExpense={submitExpense} deleteExpense={deleteExpense} />}
       {active === "T-Journal" && <TradeJournalView entries={tradeJournalEntries} insight={tradeLessonsInsight} dropdownOptions={dropdownOptions} saving={saving} submitTradeJournal={submitTradeJournal} deleteTradeJournal={deleteTradeJournal} fetchTradeLessonsInsight={fetchTradeLessonsInsight} />}
       {active === "To-Do" && <TodoView tasks={todoTasks} recurringTasks={recurringTasks} dropdownOptions={dropdownOptions} saving={saving} submitTodoTask={submitTodoTask} deleteTodoTask={deleteTodoTask} completeTodoTask={completeTodoTask} followUpTodoTask={followUpTodoTask} submitRecurringTask={submitRecurringTask} deleteRecurringTask={deleteRecurringTask} />}
+      {active === "Gym Attendance" && <GymAttendanceView userId={user.id} />}
       {active === "Reminders" && <ReminderView reminders={reminders} dropdownOptions={dropdownOptions} saving={saving} submitReminder={submitReminder} deleteReminder={deleteReminder} />}
       {active === "Reports" && report && <ReportView report={report} userId={user.id} setReport={setReport} />}
+      {active === "21 Day Challenge" && user.email === CHALLENGE_TAB_EMAIL && report && <ChallengeView report={report} userId={user.id} setReport={setReport} />}
       {active === "Admin" && user.role === "admin" && token && <AdminView users={adminUsers} dropdownOptions={dropdownOptions} token={token} saving={saving} setSaving={setSaving} reload={() => loadAll()} setDropdownOptions={setDropdownOptions} onAuthExpired={expireSession} />}
     </main>
   );
@@ -1236,7 +1261,7 @@ function DashboardView({ dashboard, report, checklist, toggleChecklistItem }: { 
       <AIAssessment dashboard={dashboard} report={report} />
       <Panel title="Today Logging Checklist">
         <div className="section">
-          <div className="score-row"><span>{isoDate()}</span><strong>{completedItems}/{checklist.length} done</strong></div>
+          <div className="score-row"><span>{withDay(isoDate())}</span><strong>{completedItems}/{checklist.length} done</strong></div>
           <div className="checklist-grid section">
             {checklist.map((item) => (
               <label className="checklist-item" key={item.id}>
@@ -1610,7 +1635,7 @@ function FoodView({ foods, dropdownOptions, fastingPlan, calorieTarget, saving, 
           />
         </section>
         <Panel title="Daily Calories">
-          <Table headers={["Date", "Consumed", "Target", "Balance", "Quality"]} rows={calorieRows.map((row) => [row.entryDate, `${row.consumed} cal`, `${row.target} cal`, row.balance >= 0 ? `${row.balance} cal left` : `${Math.abs(row.balance)} cal over`, row.quality === null ? "-" : `${row.quality}/100`])} />
+          <Table headers={["Date", "Consumed", "Target", "Balance", "Quality"]} rows={calorieRows.map((row) => [withDay(row.entryDate), `${row.consumed} cal`, `${row.target} cal`, row.balance >= 0 ? `${row.balance} cal left` : `${Math.abs(row.balance)} cal over`, row.quality === null ? "-" : `${row.quality}/100`])} />
         </Panel>
         <Panel title="Overnight Fasting">
           <Table headers={["Dinner Date", "Dinner", "Next Breakfast", "Fasted", "Target", "Balance"]} rows={fastingRows.map((row) => [row.dinnerDate, row.dinnerTime, `${row.breakfastDate} ${row.breakfastTime}`, row.fasted, "16h", row.balance])} />
@@ -2080,7 +2105,7 @@ function TradeJournalTable({ rows, editRow, deleteRow }: { rows: TradeJournalEnt
   return <Table headers={["Edit", "Delete", "Date", "Type", "Outcome", "Amount", "How I Felt", "What Happened", "Lessons Learnt", "Comments"]} rows={rows.map((row) => [
     <button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button>,
     <button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button>,
-    row.entry_date,
+    withDay(row.entry_date),
     row.trade_type,
     row.outcome,
     `Rs ${row.amount}`,
@@ -2102,8 +2127,8 @@ function buildTaskColumns(taskById: Map<number, TodoTask>, includeType: boolean)
     columns.push({ key: "task_type", label: "Type", value: (row) => row.task_type });
   }
   columns.push(
-    { key: "task_start", label: "Start", value: (row) => row.task_start ?? "" },
-    { key: "task_due", label: "Due", value: (row) => row.task_due ?? "" },
+    { key: "task_start", label: "Start", value: (row) => (row.task_start ? withDay(row.task_start) : "") },
+    { key: "task_due", label: "Due", value: (row) => (row.task_due ? withDay(row.task_due) : "") },
     { key: "task_category", label: "Category", value: (row) => row.task_category },
     { key: "task_group", label: "Group", value: (row) => row.task_group },
     { key: "task_status", label: "Status", value: (row) => row.task_status },
@@ -2115,7 +2140,7 @@ function buildTaskColumns(taskById: Map<number, TodoTask>, includeType: boolean)
     {
       key: "last_follow_up_at",
       label: "Last Follow Up",
-      value: (row) => (row.last_follow_up_at ? parseUtcTimestamp(row.last_follow_up_at).toLocaleDateString("en-CA") : ""),
+      value: (row) => (row.last_follow_up_at ? withDay(parseUtcTimestamp(row.last_follow_up_at).toLocaleDateString("en-CA")) : ""),
     },
     { key: "task_comments", label: "Comments", value: (row) => row.task_comments ?? "" },
   );
@@ -2293,7 +2318,7 @@ function buildRecurringTaskColumns(): TaskColumn<RecurringTask>[] {
     { key: "task_type", label: "Type", value: (row) => row.task_type },
     { key: "frequency", label: "Frequency", value: (row) => row.frequency },
     { key: "schedule", label: "Schedule", value: (row) => describeRecurringSchedule(row) },
-    { key: "task_due", label: "Next Due", value: (row) => row.task_due ?? "" },
+    { key: "task_due", label: "Next Due", value: (row) => (row.task_due ? withDay(row.task_due) : "") },
     { key: "task_category", label: "Category", value: (row) => row.task_category },
     { key: "task_group", label: "Group", value: (row) => row.task_group },
     { key: "task_status", label: "Status", value: (row) => row.task_status },
@@ -2873,17 +2898,191 @@ function fastingTimerInsight(countdown: FastingCountdown, elapsedMs: number) {
   };
 }
 
-function ReportView({ report, userId, setReport }: { report: Report; userId: number; setReport: (report: Report) => void }) {
-  const [editingChallenge, setEditingChallenge] = useState<Report["challenges"][number] | null>(null);
+const gymAttendanceMembers = [
+  { key: "bhumika" as const, label: "Bhumika" },
+  { key: "shyam" as const, label: "Shyam" },
+  { key: "laya" as const, label: "Laya" },
+];
 
-  async function load(period: string) {
-    setReport(await apiGet<Report>(userPath(`/reports/${period}`, userId)));
+function daysInMonthList(year: number, month: number) {
+  const totalDays = new Date(year, month, 0).getDate();
+  return Array.from({ length: totalDays }, (_, index) => {
+    const day = String(index + 1).padStart(2, "0");
+    const monthStr = String(month).padStart(2, "0");
+    return `${year}-${monthStr}-${day}`;
+  });
+}
+
+function GymAttendanceView({ userId }: { userId: number }) {
+  const today = new Date();
+  const [year, setYear] = useState(today.getFullYear());
+  const [month, setMonth] = useState(today.getMonth() + 1);
+  const [rows, setRows] = useState<GymAttendance[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [cycles, setCycles] = useState<GymCycle[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    apiGet<GymAttendance[]>(userPath(`/gym-attendance?year=${year}&month=${month}`, userId))
+      .then((data) => {
+        if (!cancelled) setRows(data);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [year, month, userId]);
+
+  async function refreshBilling() {
+    setCycles(await apiGet<GymCycle[]>(userPath("/gym-attendance/billing", userId)));
   }
 
   useEffect(() => {
-    if (Array.isArray(report.daily_reports)) return;
-    void load(report.period);
-  }, [report.daily_reports, report.period, userId]);
+    void refreshBilling();
+  }, [userId]);
+
+  const rowsByDate = useMemo(() => new Map(rows.map((row) => [row.entry_date, row])), [rows]);
+  const monthDates = useMemo(() => daysInMonthList(year, month), [year, month]);
+  const monthLabel = new Date(year, month - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  const pdfUrl = `${apiBase()}/gym-attendance/pdf?year=${year}&month=${month}&user_id=${userId}`;
+
+  function changeMonth(delta: number) {
+    const next = new Date(year, month - 1 + delta, 1);
+    setYear(next.getFullYear());
+    setMonth(next.getMonth() + 1);
+  }
+
+  async function saveDay(entryDate: string, patch: Partial<Pick<GymAttendance, "bhumika" | "shyam" | "laya" | "comments">>) {
+    const current = rowsByDate.get(entryDate);
+    const nextState = {
+      bhumika: current?.bhumika ?? false,
+      shyam: current?.shyam ?? false,
+      laya: current?.laya ?? false,
+      comments: current?.comments ?? null,
+      ...patch,
+    };
+    const optimistic: GymAttendance = { id: current?.id ?? -1, user_id: userId, entry_date: entryDate, ...nextState };
+    setRows((prev) => [...prev.filter((row) => row.entry_date !== entryDate), optimistic]);
+    const updated = await apiPatch<GymAttendance>(userPath(`/gym-attendance/${entryDate}`, userId), nextState);
+    setRows((prev) => [...prev.filter((row) => row.entry_date !== entryDate), updated]);
+    await refreshBilling();
+  }
+
+  async function togglePaid(member: string, cycleNumber: number, paid: boolean) {
+    setCycles((prev) => prev.map((cycle) => (cycle.member === member && cycle.cycle_number === cycleNumber ? { ...cycle, paid, paid_date: paid ? isoDate() : null } : cycle)));
+    await apiPatch(userPath(`/gym-attendance/billing/${member}/${cycleNumber}`, userId), {
+      paid,
+      paid_date: paid ? isoDate() : null,
+    });
+    await refreshBilling();
+  }
+
+  return (
+    <div className="stack">
+      <Panel title="Gym Attendance">
+        <div className="section">
+          <div className="actions">
+            <button className="button secondary" type="button" onClick={() => changeMonth(-1)}>&larr; Prev</button>
+            <strong>{monthLabel}</strong>
+            <button className="button secondary" type="button" onClick={() => changeMonth(1)}>Next &rarr;</button>
+            <a className="button" href={pdfUrl} target="_blank" rel="noreferrer">Download PDF</a>
+          </div>
+          <div className="score-list">
+            {gymAttendanceMembers.map((member) => (
+              <div className="score-row" key={member.key}>
+                <span>{member.label}</span>
+                <strong>{rows.filter((row) => row[member.key]).length} / {monthDates.length} days</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="table-wrap section">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                {gymAttendanceMembers.map((member) => <th key={member.key}>{member.label}</th>)}
+                <th>Comments</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={gymAttendanceMembers.length + 2}>Loading...</td></tr>
+              ) : monthDates.map((entryDate) => {
+                const row = rowsByDate.get(entryDate);
+                return (
+                  <tr key={entryDate}>
+                    <td>{withDay(entryDate)}</td>
+                    {gymAttendanceMembers.map((member) => (
+                      <td key={member.key}>
+                        <input
+                          type="checkbox"
+                          checked={row?.[member.key] ?? false}
+                          onChange={(event) => saveDay(entryDate, { [member.key]: event.currentTarget.checked })}
+                        />
+                      </td>
+                    ))}
+                    <td>
+                      <input
+                        type="text"
+                        className="table-input"
+                        defaultValue={row?.comments ?? ""}
+                        key={row?.comments ?? ""}
+                        onBlur={(event) => {
+                          const value = event.currentTarget.value;
+                          if (value !== (row?.comments ?? "")) saveDay(entryDate, { comments: value || null });
+                        }}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+      <Panel title="Fee Cycles (12 classes = Rs 7,000)">
+        <div className="section">
+          {gymAttendanceMembers.map((member) => {
+            const memberCycles = cycles.filter((cycle) => cycle.member === member.key);
+            return (
+              <div key={member.key} className="log-category-group">
+                <h3>{member.label}</h3>
+                {memberCycles.length ? (
+                  <Table
+                    headers={["Cycle", "Classes", "Date Range", "Status", "Fee", "Paid"]}
+                    rows={memberCycles.map((cycle) => [
+                      cycle.cycle_number,
+                      `${cycle.count}/12`,
+                      cycle.class_dates.length ? `${withDay(cycle.class_dates[0])} to ${withDay(cycle.class_dates[cycle.class_dates.length - 1])}` : "-",
+                      cycle.complete ? "Complete" : "In progress",
+                      cycle.complete ? `Rs ${cycle.fee_amount.toFixed(0)}` : "-",
+                      <label className="checkbox-label">
+                        <input
+                          type="checkbox"
+                          disabled={!cycle.complete}
+                          checked={cycle.paid}
+                          onChange={(event) => togglePaid(member.key, cycle.cycle_number, event.currentTarget.checked)}
+                        />{" "}
+                        <span>{cycle.paid ? `Paid${cycle.paid_date ? ` (${cycle.paid_date})` : ""}` : "Unpaid"}</span>
+                      </label>,
+                    ])}
+                  />
+                ) : <p className="muted">No classes attended yet.</p>}
+              </div>
+            );
+          })}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function ChallengeView({ report, userId, setReport }: { report: Report; userId: number; setReport: (report: Report) => void }) {
+  const [editingChallenge, setEditingChallenge] = useState<Report["challenges"][number] | null>(null);
 
   async function submitChallenge(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -2915,8 +3114,6 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
   }
   return (
     <div className="stack">
-      <div className="actions"><button className="button secondary" onClick={() => load("daily")}>Daily</button><button className="button secondary" onClick={() => load("weekly")}>Weekly</button><button className="button secondary" onClick={() => load("monthly")}>Monthly</button><button className="button secondary" onClick={() => load("quarterly")}>Quarterly</button></div>
-      <section className="grid metrics"><Metric title="Period" value={report.period} note="Generated report" /><Metric title="Life Score" value={String(report.life_score)} note="0-1000" /><Metric title="Accountability" value={String(report.accountability_score)} note="Logging" /></section>
       <Panel title="21 Day Challenges">
         <form className="section" key={editingChallenge?.id ?? "new-challenge"} onSubmit={submitChallenge}>
           <div className="form-grid">
@@ -2938,7 +3135,7 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
               <details className="challenge" key={challenge.id}>
                 <summary>
                   <strong>{challenge.title}</strong>
-                  <span>{challenge.start_date} to {challenge.end_date}</span>
+                  <span>{withDay(challenge.start_date)} to {withDay(challenge.end_date)}</span>
                   <span>Target: {formatKg(challenge.target_weight_kg)}</span>
                   <span>Latest: {weightSummary.latest}</span>
                   <span>To go: {weightSummary.toGo}</span>
@@ -2946,12 +3143,30 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
                   <button className="button mini secondary" type="button" onClick={(event) => { event.preventDefault(); deleteChallenge(challenge.id); }}>Delete</button>
                 </summary>
                 {challenge.notes && <p className="muted">{challenge.notes}</p>}
-                <Table headers={["Date", "Weight", "Sugar", "Sugar Type", "Sugar Time"]} rows={challenge.days.map((day) => [day.entry_date, day.weight_kg ?? "-", day.sugar ?? "-", day.sugar_context ?? "-", day.sugar_time ?? "-"])} />
+                <Table headers={["Date", "Weight", "Sugar", "Sugar Type", "Sugar Time"]} rows={challenge.days.map((day) => [withDay(day.entry_date), day.weight_kg ?? "-", day.sugar ?? "-", day.sugar_context ?? "-", day.sugar_time ?? "-"])} />
               </details>
             );
           }) : <p className="muted">No challenges yet.</p>}
         </div>
       </Panel>
+    </div>
+  );
+}
+
+function ReportView({ report, userId, setReport }: { report: Report; userId: number; setReport: (report: Report) => void }) {
+  async function load(period: string) {
+    setReport(await apiGet<Report>(userPath(`/reports/${period}`, userId)));
+  }
+
+  useEffect(() => {
+    if (Array.isArray(report.daily_reports)) return;
+    void load(report.period);
+  }, [report.daily_reports, report.period, userId]);
+
+  return (
+    <div className="stack">
+      <div className="actions"><button className="button secondary" onClick={() => load("daily")}>Daily</button><button className="button secondary" onClick={() => load("weekly")}>Weekly</button><button className="button secondary" onClick={() => load("monthly")}>Monthly</button><button className="button secondary" onClick={() => load("quarterly")}>Quarterly</button></div>
+      <section className="grid metrics"><Metric title="Period" value={report.period} note="Generated report" /><Metric title="Life Score" value={String(report.life_score)} note="0-1000" /><Metric title="Accountability" value={String(report.accountability_score)} note="Logging" /></section>
       <Panel title="Weight Trend">
         <WeightTrendChart days={report.daily_reports ?? []} />
       </Panel>
@@ -2963,7 +3178,7 @@ function ReportView({ report, userId, setReport }: { report: Report; userId: num
           {report.daily_reports?.length ? report.daily_reports.map((day) => (
             <details className="challenge" key={day.entry_date}>
               <summary>
-                <strong>{day.entry_date}</strong>
+                <strong>{withDay(day.entry_date)}</strong>
                 <span>Weight: {day.weight_kg ?? "-"}</span>
                 <span>BP: {day.bp ?? "-"}</span>
                 <span>Sugar: {day.sugar ?? "-"}{day.sugar_context ? ` (${day.sugar_context})` : ""}</span>
@@ -3041,12 +3256,12 @@ function WeightTrendChart({ days }: { days: Report["daily_reports"] }) {
         <div className="trend-card">
           <div className="muted">Latest</div>
           <strong>{latest.weightKg.toFixed(1)} kg</strong>
-          <span>{latest.entryDate}</span>
+          <span>{withDay(latest.entryDate)}</span>
         </div>
         <div className="trend-card">
           <div className="muted">Total Change</div>
           <strong>{weightDeltaLabel(totalChange)}</strong>
-          <span>Since {first.entryDate}</span>
+          <span>Since {withDay(first.entryDate)}</span>
         </div>
         <div className="trend-card">
           <div className="muted">Last Move</div>
@@ -3065,7 +3280,7 @@ function WeightTrendChart({ days }: { days: Report["daily_reports"] }) {
         rows={recentRows.map((point, index) => {
           const previousPoint = points[points.length - 1 - index - 1];
           const delta = previousPoint ? point.weightKg - previousPoint.weightKg : 0;
-          return [point.entryDate, `${point.weightKg.toFixed(1)} kg`, previousPoint ? weightDeltaLabel(delta) : "-"];
+          return [withDay(point.entryDate), `${point.weightKg.toFixed(1)} kg`, previousPoint ? weightDeltaLabel(delta) : "-"];
         })}
       />
     </div>
@@ -3129,7 +3344,7 @@ function ReportEntryList({ days }: { days: Report["daily_reports"] }) {
     <Table
       headers={["Date", "Weight", "BP", "Food", "Habits", "Meds", "Reminders"]}
       rows={days.map((day) => [
-        day.entry_date,
+        withDay(day.entry_date),
         day.weight_kg === null ? "-" : `${day.weight_kg} kg`,
         day.bp ?? "-",
         `${day.food_count} item${day.food_count === 1 ? "" : "s"}`,
@@ -3157,7 +3372,7 @@ function JournalTable({ rows, editRow, deleteRow }: { rows: DailyCheckIn[]; edit
   return <Table headers={["Edit", "Delete", "Date", "Feeling", "Scores", "Gratitude", "Journal Notes"]} rows={rows.map((row) => [
     <button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button>,
     <button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button>,
-    row.entry_date,
+    withDay(row.entry_date),
     row.feeling ?? "-",
     `Mood ${row.mood ?? "-"} | Energy ${row.energy ?? "-"} | Stress ${row.stress ?? "-"} | Day ${row.day_rating ?? "-"}`,
     row.gratitude ?? "-",
@@ -3169,7 +3384,7 @@ function HealthTable({ rows, editRow, deleteRow }: { rows: HealthMetric[]; editR
   return <Table headers={["Edit", "Delete", "Date", "Time", "Weight", "BP", "Sugar", "Type", "Body Fat", "Shite", "Notes"]} rows={rows.map((row) => [
     <button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button>,
     <button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button>,
-    row.entry_date,
+    withDay(row.entry_date),
     timeValue(row.measurement_time) ?? "-",
     row.weight_kg ?? "-",
     row.systolic_bp && row.diastolic_bp ? `${row.systolic_bp}/${row.diastolic_bp}` : "-",
@@ -3185,7 +3400,7 @@ function HabitTable({ rows, editRow, deleteRow }: { rows: HabitLog[]; editRow: (
   return <Table headers={["Edit", "Delete", "Date", "Time", "Name", "Value", "Target", "Done", "Notes"]} rows={rows.map((row) => [
     <button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button>,
     <button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button>,
-    row.entry_date,
+    withDay(row.entry_date),
     timeValue(row.habit_time) ?? "-",
     row.name,
     `${row.value ?? "-"} ${row.unit ?? ""}`,
@@ -3199,7 +3414,7 @@ function FoodTable({ rows, fastingPlan, editFood, deleteFood }: { rows: FoodLog[
   return <Table className="food-log-table" headers={["Edit", "Delete", "Date", "Time", "Meal", "Food", "Walk", "Fasting", "Est. grams", "Calories", "Macros", "Quality", "Flags"]} rows={rows.map((row) => [
     <button className="button mini secondary" type="button" onClick={() => editFood(row)}>Edit</button>,
     <button className="button mini danger" type="button" onClick={() => deleteFood(row)}>Delete</button>,
-    row.entry_date,
+    withDay(row.entry_date),
     timeValue(row.meal_time) ?? "-",
     row.meal_type,
     row.food_item || "-",
@@ -3217,7 +3432,7 @@ function ExpenseTable({ rows, editRow, deleteRow }: { rows: ExpenseLog[]; editRo
   return <Table headers={["Edit", "Delete", "Date", "Time", "Expense", "Type", "Cat", "Mode", "Cost", "Notes"]} rows={rows.map((row) => [
     <button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button>,
     <button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button>,
-    row.expense_date,
+    withDay(row.expense_date),
     timeValue(row.expense_time) ?? "-",
     row.expense,
     row.expense_type,
@@ -3232,7 +3447,7 @@ function MedTable({ rows, editRow, deleteRow }: { rows: MedLog[]; editRow: (row:
   return <Table headers={["Edit", "Delete", "Date", "Time", "Meds", "Notes"]} rows={rows.map((row) => [
     <button className="button mini secondary" type="button" onClick={() => editRow(row)}>Edit</button>,
     <button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button>,
-    row.med_date,
+    withDay(row.med_date),
     timeValue(row.med_time) ?? "-",
     row.med_name,
     row.notes ?? "-",
@@ -3285,7 +3500,7 @@ function ReminderTable({ rows, editRow, deleteRow }: { rows: Reminder[]; editRow
     <button className="button mini danger" type="button" onClick={() => deleteRow(row)}>Delete</button>,
     row.title,
     row.category,
-    row.due_date ?? "-",
+    withDay(row.due_date),
     row.cadence ?? "-",
     row.channel,
     row.completed ? "yes" : "no",

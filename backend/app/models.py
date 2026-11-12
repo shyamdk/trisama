@@ -263,6 +263,31 @@ class RecurringTask(Base, TimestampMixin):
     month_of_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
+class GymAttendance(Base, TimestampMixin):
+    __tablename__ = "gym_attendance"
+    __table_args__ = (UniqueConstraint("user_id", "entry_date", name="uq_gym_attendance_user_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    entry_date: Mapped[date] = mapped_column(Date, index=True)
+    bhumika: Mapped[bool] = mapped_column(default=False)
+    shyam: Mapped[bool] = mapped_column(default=False)
+    laya: Mapped[bool] = mapped_column(default=False)
+    comments: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class GymFeePayment(Base, TimestampMixin):
+    __tablename__ = "gym_fee_payments"
+    __table_args__ = (UniqueConstraint("user_id", "member", "cycle_number", name="uq_gym_fee_payment"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    member: Mapped[str] = mapped_column(String(40), index=True)
+    cycle_number: Mapped[int] = mapped_column(Integer, index=True)
+    paid: Mapped[bool] = mapped_column(default=False)
+    paid_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+
 class AuthSession(Base):
     __tablename__ = "auth_sessions"
 

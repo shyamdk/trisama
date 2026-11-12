@@ -366,6 +366,37 @@ class RecurringTaskOut(RecurringTaskCreate):
     model_config = {"from_attributes": True}
 
 
+class GymAttendanceUpdate(BaseModel):
+    bhumika: bool = False
+    shyam: bool = False
+    laya: bool = False
+    comments: str | None = None
+
+
+class GymAttendanceOut(GymAttendanceUpdate):
+    id: int
+    user_id: int
+    entry_date: date
+
+    model_config = {"from_attributes": True}
+
+
+class GymFeePaymentUpdate(BaseModel):
+    paid: bool = False
+    paid_date: date | None = None
+
+
+class GymCycleOut(BaseModel):
+    member: str
+    cycle_number: int
+    class_dates: list[date]
+    count: int
+    complete: bool
+    fee_amount: float
+    paid: bool
+    paid_date: date | None = None
+
+
 class DropdownOptionCreate(BaseModel):
     dropdown_key: str = Field(min_length=1, max_length=80)
     value: str = Field(min_length=1, max_length=160)

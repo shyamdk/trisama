@@ -8,14 +8,15 @@ from typing import TypeVar
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from .database import Base, SessionLocal, engine, get_db
 from .food_ai import apply_food_enrichment, enrich_food_log, food_analysis_for_form, load_dotenv
-from .models import AuthSession, Challenge, DailyCheckIn, DailyChecklistItem, DropdownOption, ExpenseLog, FinanceSnapshot, FoodLog, HabitLog, HealthMetric, MedLog, RecurringTask, Reminder, TodoTask, TradeJournalEntry, UserProfile
+from .gym_pdf import build_gym_attendance_pdf
+from .models import AuthSession, Challenge, DailyCheckIn, DailyChecklistItem, DropdownOption, ExpenseLog, FinanceSnapshot, FoodLog, GymAttendance, GymFeePayment, HabitLog, HealthMetric, MedLog, RecurringTask, Reminder, TodoTask, TradeJournalEntry, UserProfile
 from .telegram_notify import send_telegram_message
 from .trade_ai import distill_trade_lessons
 from .schemas import (
@@ -43,6 +44,10 @@ from .schemas import (
     FoodLogOut,
     FoodAnalyzeOut,
     FoodAnalyzeRequest,
+    GymAttendanceOut,
+    GymAttendanceUpdate,
+    GymCycleOut,
+    GymFeePaymentUpdate,
     HabitLogCreate,
     HabitLogOut,
     HealthMetricCreate,
@@ -72,15 +77,19 @@ app = FastAPI(title="PLOS API", version="0.1.0")
 scheduler = BackgroundScheduler()
 CRITICAL_TASK_CATEGORY = "Critical"
 CRITICAL_TASK_REMINDER_TIMEZONE = "Asia/Kolkata"
+GYM_MEMBERS = ["bhumika", "shyam", "laya"]
+GYM_MEMBER_LABELS = {"bhumika": "Bhumika", "shyam": "Shyam", "laya": "Laya"}
+GYM_CLASSES_PER_CYCLE = 12
+GYM_FEE_PER_CYCLE = 7000.0
 DEFAULT_USER_ID = 1
 DEFAULT_ADMIN_EMAIL = os.getenv("PLOS_DEFAULT_ADMIN_EMAIL")
 DEFAULT_ADMIN_PASSWORD = os.getenv("PLOS_DEFAULT_ADMIN_PASSWORD")
 SESSION_DAYS = 7
-DEFAULT_ENABLED_MODULE_KEYS = ["health", "food", "exercise", "sleep", "career", "bad_habits", "reminders", "journal", "expense_tracker", "meds", "trade_journal", "todo"]
-NEW_MODULE_KEYS = {"journal", "expense_tracker", "meds", "trade_journal", "todo"}
+DEFAULT_ENABLED_MODULE_KEYS = ["health", "food", "exercise", "sleep", "career", "bad_habits", "reminders", "journal", "expense_tracker", "meds", "trade_journal", "todo", "gym_attendance"]
+NEW_MODULE_KEYS = {"journal", "expense_tracker", "meds", "trade_journal", "todo", "gym_attendance"}
 REMOVED_MODULE_KEYS = {"social", "finance"}
 DEFAULT_ENABLED_MODULES = json.dumps(DEFAULT_ENABLED_MODULE_KEYS)
-UserOwnedModel = TypeVar("UserOwnedModel", DailyCheckIn, DailyChecklistItem, HealthMetric, HabitLog, FoodLog, FinanceSnapshot, ExpenseLog, MedLog, Reminder, Challenge, TradeJournalEntry, TodoTask, RecurringTask)
+UserOwnedModel = TypeVar("UserOwnedModel", DailyCheckIn, DailyChecklistItem, HealthMetric, HabitLog, FoodLog, FinanceSnapshot, ExpenseLog, MedLog, Reminder, Challenge, TradeJournalEntry, TodoTask, RecurringTask, GymAttendance, GymFeePayment)
 DEFAULT_DAILY_CHECKLIST = [
     ("body_metrics", "Weight / body metrics"),
     ("bp", "BP check-in"),
@@ -1630,6 +1639,162 @@ def delete_recurring_task(task_id: int, user_id: int = Query(DEFAULT_USER_ID), d
     item = get_owned_item(db, RecurringTask, user_id, task_id, "Recurring task")
     db.delete(item)
     db.commit()
+
+
+@app.get("/gym-attendance", response_model=list[GymAttendanceOut])
+def list_gym_attendance(
+    year: int = Query(...),
+    month: int = Query(..., ge=1, le=12),
+    user_id: int = Query(DEFAULT_USER_ID),
+    db: Session = Depends(get_db),
+) -> list[GymAttendance]:
+    month_start = date(year, month, 1)
+    month_end = add_months(month_start, 1)
+    return (
+        user_query(db, GymAttendance, user_id)
+        .filter(GymAttendance.entry_date >= month_start, GymAttendance.entry_date < month_end)
+        .order_by(GymAttendance.entry_date)
+        .all()
+    )
+
+
+@app.patch("/gym-attendance/{entry_date}", response_model=GymAttendanceOut)
+def upsert_gym_attendance(
+    entry_date: date,
+    payload: GymAttendanceUpdate,
+    user_id: int = Query(DEFAULT_USER_ID),
+    db: Session = Depends(get_db),
+) -> GymAttendance:
+    get_user(db, user_id)
+    item = (
+        user_query(db, GymAttendance, user_id)
+        .filter(GymAttendance.entry_date == entry_date)
+        .first()
+    )
+    if not item:
+        item = GymAttendance(user_id=user_id, entry_date=entry_date)
+        db.add(item)
+    item.bhumika = payload.bhumika
+    item.shyam = payload.shyam
+    item.laya = payload.laya
+    item.comments = payload.comments
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+def compute_gym_cycles(db: Session, user_id: int) -> dict[str, list[dict]]:
+    payments = {
+        (row.member, row.cycle_number): row
+        for row in user_query(db, GymFeePayment, user_id).all()
+    }
+    result: dict[str, list[dict]] = {}
+    for member in GYM_MEMBERS:
+        column = getattr(GymAttendance, member)
+        dates = [
+            row.entry_date
+            for row in user_query(db, GymAttendance, user_id)
+            .filter(column.is_(True))
+            .order_by(GymAttendance.entry_date)
+            .all()
+        ]
+        cycles = []
+        for index in range(0, len(dates), GYM_CLASSES_PER_CYCLE):
+            chunk = dates[index : index + GYM_CLASSES_PER_CYCLE]
+            cycle_number = index // GYM_CLASSES_PER_CYCLE + 1
+            complete = len(chunk) == GYM_CLASSES_PER_CYCLE
+            payment = payments.get((member, cycle_number))
+            cycles.append(
+                {
+                    "member": member,
+                    "cycle_number": cycle_number,
+                    "class_dates": chunk,
+                    "count": len(chunk),
+                    "complete": complete,
+                    "fee_amount": GYM_FEE_PER_CYCLE if complete else 0.0,
+                    "paid": payment.paid if payment else False,
+                    "paid_date": payment.paid_date if payment else None,
+                }
+            )
+        result[member] = cycles
+    return result
+
+
+@app.get("/gym-attendance/billing", response_model=list[GymCycleOut])
+def get_gym_billing(user_id: int = Query(DEFAULT_USER_ID), db: Session = Depends(get_db)) -> list[dict]:
+    cycles_by_member = compute_gym_cycles(db, user_id)
+    flattened: list[dict] = []
+    for member_cycles in cycles_by_member.values():
+        flattened.extend(member_cycles)
+    return flattened
+
+
+@app.patch("/gym-attendance/billing/{member}/{cycle_number}", response_model=GymCycleOut)
+def mark_gym_cycle_paid(
+    member: str,
+    cycle_number: int,
+    payload: GymFeePaymentUpdate,
+    user_id: int = Query(DEFAULT_USER_ID),
+    db: Session = Depends(get_db),
+) -> dict:
+    if member not in GYM_MEMBERS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown member")
+    get_user(db, user_id)
+    item = (
+        user_query(db, GymFeePayment, user_id)
+        .filter(GymFeePayment.member == member, GymFeePayment.cycle_number == cycle_number)
+        .first()
+    )
+    if not item:
+        item = GymFeePayment(user_id=user_id, member=member, cycle_number=cycle_number)
+        db.add(item)
+    item.paid = payload.paid
+    item.paid_date = payload.paid_date
+    db.commit()
+    db.refresh(item)
+
+    cycles_by_member = compute_gym_cycles(db, user_id)
+    for cycle in cycles_by_member.get(member, []):
+        if cycle["cycle_number"] == cycle_number:
+            return cycle
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cycle not found")
+
+
+@app.get("/gym-attendance/pdf")
+def download_gym_attendance_pdf(
+    year: int = Query(...),
+    month: int = Query(..., ge=1, le=12),
+    user_id: int = Query(DEFAULT_USER_ID),
+    db: Session = Depends(get_db),
+) -> Response:
+    month_start = date(year, month, 1)
+    month_end = add_months(month_start, 1)
+    rows = (
+        user_query(db, GymAttendance, user_id)
+        .filter(GymAttendance.entry_date >= month_start, GymAttendance.entry_date < month_end)
+        .order_by(GymAttendance.entry_date)
+        .all()
+    )
+    attendance_rows = [
+        {
+            "entry_date": row.entry_date.isoformat(),
+            "bhumika": row.bhumika,
+            "shyam": row.shyam,
+            "laya": row.laya,
+            "comments": row.comments,
+        }
+        for row in rows
+        if row.bhumika or row.shyam or row.laya
+    ]
+    cycles_by_member = compute_gym_cycles(db, user_id)
+    month_label = month_start.strftime("%B %Y")
+    pdf_bytes = build_gym_attendance_pdf(month_label, attendance_rows, cycles_by_member)
+    filename = f"gym-attendance-{year}-{month:02d}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/dashboard", response_model=DashboardOut)

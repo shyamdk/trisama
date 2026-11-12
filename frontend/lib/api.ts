@@ -1,7 +1,7 @@
 const configuredApiBase = process.env.NEXT_PUBLIC_API_BASE;
 export const DEFAULT_USER_ID = 1;
 
-function apiBase() {
+export function apiBase() {
   if (configuredApiBase) return configuredApiBase;
   if (typeof window !== "undefined") {
     return `${window.location.protocol}//${window.location.hostname}:8010`;
@@ -248,6 +248,27 @@ export type RecurringTask = {
   day_of_month: number | null;
   month_of_year: number | null;
   created_at: string;
+};
+
+export type GymAttendance = {
+  id: number;
+  user_id: number;
+  entry_date: string;
+  bhumika: boolean;
+  shyam: boolean;
+  laya: boolean;
+  comments: string | null;
+};
+
+export type GymCycle = {
+  member: string;
+  cycle_number: number;
+  class_dates: string[];
+  count: number;
+  complete: boolean;
+  fee_amount: number;
+  paid: boolean;
+  paid_date: string | null;
 };
 
 export type DropdownOption = {
